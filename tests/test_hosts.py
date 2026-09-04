@@ -7,8 +7,8 @@ from mcp_openssh_connector.core.utils.hosts import read_aliases
 
 def test_read_aliases_order_dedup_patterns(tmp_path: Path) -> None:
     # beta gamma — несколько имён; *.example.com и with?wild — шаблоны (пропуск);
-    # закомментированный Host — не хост; повтор alpha — без дубля; delta с хвостовым
-    # комментарием.
+    # !neg — отрицание (пропуск); закомментированный Host — не хост; повтор alpha
+    # — без дубля; delta с хвостовым комментарием; Host=eq — форма с `=`.
     config = tmp_path / "config"
     config.write_text(
         "Host alpha\n"
@@ -16,12 +16,14 @@ def test_read_aliases_order_dedup_patterns(tmp_path: Path) -> None:
         "Host beta gamma\n"
         "Host *.example.com\n"
         "Host with?wild\n"
+        "Host !neg other\n"
         "# Host commented\n"
         "Host alpha\n"
-        "Host delta  # хвостовой комментарий\n",
+        "Host delta  # хвостовой комментарий\n"
+        "Host=eq\n",
         encoding="utf-8",
     )
-    assert read_aliases(config) == ["alpha", "beta", "gamma", "delta"]
+    assert read_aliases(config) == ["alpha", "beta", "gamma", "other", "delta", "eq"]
 
 
 def test_read_aliases_empty(tmp_path: Path) -> None:

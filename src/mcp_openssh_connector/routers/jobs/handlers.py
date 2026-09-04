@@ -5,21 +5,20 @@
 """
 
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Annotated
 
 from fastmcp import FastMCP
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from ...core.errors import UserError
-from ...core.schemas import NonEmptyStr, SudoMode
+from ...core.schemas import READS_LOCAL, RUNS_REMOTE, NonEmptyStr, SudoMode
 from .schemas import JobRef, JobSnapshot
 from .services import manager
 
 
 @contextlib.asynccontextmanager
-async def _lifespan(_server: FastMCP) -> AsyncIterator[None]:
+async def _lifespan(_server: FastMCP) -> AsyncGenerator[None]:
     """Снять все фоновые задачи при остановке."""
     try:
         yield
@@ -30,16 +29,7 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[None]:
 router: FastMCP = FastMCP(name="jobs", lifespan=_lifespan, on_duplicate="error")
 
 
-@router.tool(
-    title="Команда в фоне",
-    tags={"jobs"},
-    annotations=ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=True,
-        idempotent_hint=False,
-        open_world_hint=True,
-    ),
-)
+@router.tool(title="Команда в фоне", tags={"jobs"}, annotations=RUNS_REMOTE)
 async def start(
     host: NonEmptyStr,
     command: NonEmptyStr,
@@ -63,12 +53,10 @@ async def start(
 @router.tool(
     title="Состояние задачи",
     tags={"jobs"},
-    # Чтение забирает прирост вывода из буфера — повторный вызов даст другое.
+    # Чтение забирает прирост вывода из буфера: состояние сервера меняется,
+    # повторный вызов даст другое; в сеть не ходит.
     annotations=ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=False,
-        idempotent_hint=False,
-        open_world_hint=False,
+        read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
     ),
 )
 async def job(job_id: NonEmptyStr, wait: Annotated[float, Field(ge=0)] = 0.0) -> JobSnapshot:
@@ -79,22 +67,18 @@ async def job(job_id: NonEmptyStr, wait: Annotated[float, Field(ge=0)] = 0.0) ->
     Args:
         job_id: Идентификатор из start.
         wait: Секунды ожидания завершения, чтобы не опрашивать в цикле; 0 — не
-            ждать.
+            ждать. Больше потолка сервера — ждём столько, сколько он позволяет.
     """
-    snap = await manager.snapshot(job_id, wait)
-    if snap is None:
-        raise UserError(f"задача {job_id!r} не найдена")
-    return snap
+    return await manager.snapshot(job_id, wait)
 
 
 @router.tool(
     title="Снять задачу",
     tags={"jobs"},
+    # Снятие убивает локальный ssh, а с ним обрывает и удалённую команду;
+    # повтор ничего не меняет.
     annotations=ToolAnnotations(
-        read_only_hint=False,
-        destructive_hint=True,
-        idempotent_hint=True,
-        open_world_hint=True,
+        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
     ),
 )
 async def kill(job_id: NonEmptyStr) -> bool:
@@ -109,11 +93,7 @@ async def kill(job_id: NonEmptyStr) -> bool:
     return manager.kill(job_id)
 
 
-@router.tool(
-    title="Список задач",
-    tags={"jobs"},
-    annotations=ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False),
-)
+@router.tool(title="Список задач", tags={"jobs"}, annotations=READS_LOCAL)
 async def jobs() -> list[JobRef]:
     """Все фоновые задачи сессии: id, хост, команда, состояние (без вывода)."""
     return manager.listing()

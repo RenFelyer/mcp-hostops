@@ -9,53 +9,50 @@ ssh-вызовом. Флаг deep добавляет реальный вход `
 не блокировать цикл событий.
 """
 
-import errno
+import logging
 import shlex
 import socket
 import subprocess
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from functools import partial
 from time import sleep, time
 
-from ..config import Settings
-from ..schemas import AVAILABLE, UNAVAILABLE, Availability, Host, as_availability
+from ..config.constants import PROBE_PATH_BUDGET, PROBE_PATH_PAUSE, PROBE_RETRY_ERRNOS
+from ..config.environment import Settings
+from ..schemas import Availability, Host, as_availability
 from .hosts import pairs, resolve
+from .parallel import fan_out
 from .ssh import run_sync, ssh_argv
 
-# ZeroTier поднимает путь к пиру лениво: пока идёт рандеву через корневые
-# серверы, ядро мгновенно отдаёт EHOSTUNREACH. Одна проба принимает это за
-# «узел мёртв», хотя вторая уже проходит. Больший таймаут не лечит — ошибка
-# приходит сразу, а не по нему.
-_RETRY_ERRNOS = frozenset({errno.EHOSTUNREACH, errno.ENETUNREACH})
-_PATH_BUDGET = 2.5  # с суммарно на повторы, пока оверлей поднимает путь
-_PATH_PAUSE = 0.25  # с между попытками
+log = logging.getLogger(__name__)
+
+Statuses = dict[str, Availability]
 
 
 def _reachable(host: Host, connect_timeout: float) -> bool:
     """Открыт ли порт: TCP-коннект, а не полный вход с аутентификацией.
 
-    Ошибку маршрутизации перепроверяем до `_PATH_BUDGET` — на оверлее она значит
-    лишь «путь ещё не поднят». Отказ и таймаут перепроверять нечего: это ответ.
+    Ошибку маршрутизации перепроверяем до `PROBE_PATH_BUDGET` — на оверлее она
+    значит лишь «путь ещё не поднят». Отказ и таймаут перепроверять нечего: это
+    ответ.
     """
-    deadline = time() + _PATH_BUDGET
+    deadline = time() + PROBE_PATH_BUDGET
     while True:
         try:
             with socket.create_connection((host.hostname, host.port), connect_timeout):
                 return True
         except OSError as err:
-            if err.errno not in _RETRY_ERRNOS or time() >= deadline:
+            if err.errno not in PROBE_RETRY_ERRNOS or time() >= deadline:
                 return False
-        sleep(_PATH_PAUSE)
-
-
-def _probe_direct(host: Host, s: Settings) -> dict[str, Availability]:
-    return {host.alias: AVAILABLE if _reachable(host, s.connect_timeout) else UNAVAILABLE}
+        sleep(PROBE_PATH_PAUSE)
 
 
 def _jump_script(group: list[Host]) -> str:
-    """Скрипт проверки портов группы на jump-хосте.
+    """Скрипт проверки портов группы на jump-хосте (нужны bash и `timeout`).
 
-    hostname/port/alias экранируются `shlex.quote`: значения из конфига не должны
+    Печатает по строке «алиас статус» словами из `Availability`. hostname, port
+    и alias экранируются `shlex.quote`: значения из конфига не должны
     подставляться в удалённый bash как код.
     """
     checks = []
@@ -66,20 +63,26 @@ def _jump_script(group: list[Host]) -> str:
         checks.append(
             f'if timeout 1 bash -c \'exec 3<>/dev/tcp/"$0"/"$1"\' '
             f"{host_q} {port_q} 2>/dev/null; "
-            f"then echo {alias_q} {AVAILABLE}; else echo {alias_q} {UNAVAILABLE}; fi"
+            f"then echo {alias_q} available; else echo {alias_q} unavailable; fi"
         )
     return "; ".join(checks)
 
 
-def _probe_via(jump: Host, group: list[Host], s: Settings) -> dict[str, Availability]:
+def _probe_direct(host: Host, s: Settings) -> Statuses:
+    return {host.alias: "available" if _reachable(host, s.connect_timeout) else "unavailable"}
+
+
+def _probe_via(jump: Host, group: list[Host], s: Settings) -> Statuses:
     """Группа за одним jump-хостом: прямого маршрута нет, пробуем изнутри его сети.
 
     Недоступный jump означает недоступность всего за ним — это вывод, а не догадка.
+    TCP-проба самого jump возможна, только если он прямой: за своим jump-хостом
+    его порт отсюда не виден, и решает уже ssh-вызов.
     """
-    down = {h.alias: UNAVAILABLE for h in group}
+    down: Statuses = dict.fromkeys((h.alias for h in group), "unavailable")
     # ssh к самому jump-хосту ленивость оверлея задевает так же, но повтора внутри
     # себя не имеет: холодный путь утащил бы в unavailable всю группу за ним.
-    if not _reachable(jump, s.connect_timeout):
+    if not jump.proxyjump and not _reachable(jump, s.connect_timeout):
         return down
     try:
         done = run_sync([*ssh_argv(jump, s), _jump_script(group)], s.jump_timeout)
@@ -88,39 +91,35 @@ def _probe_via(jump: Host, group: list[Host], s: Settings) -> dict[str, Availabi
     if done.returncode != 0:
         return down
     seen = pairs(done.stdout)
-    return {h.alias: as_availability(seen.get(h.alias, "")) for h in group}
+    return {h.alias: as_availability(seen.get(h.alias)) for h in group}
 
 
-def measure(hosts: list[Host], s: Settings) -> dict[str, Availability]:
+def measure(hosts: list[Host], s: Settings) -> Statuses:
     """Все пробы разом; время ограничено таймаутами самих проб.
 
     Returns:
         Статус по каждому алиасу из `hosts`.
     """
-    if not hosts:
-        return {}
     known = {h.alias: h for h in hosts}
-    direct = [h for h in hosts if not h.proxyjump]
     behind: dict[str, list[Host]] = defaultdict(list)
     for host in hosts:
         if host.proxyjump:
             behind[host.proxyjump].append(host)
+
+    statuses: Statuses = {}
+    probes: list[Callable[[], Statuses]] = [partial(_probe_direct, h, s) for h in hosts if not h.proxyjump]
     # jump обычно и сам описан в конфиге — тогда он уже разобран, второй `ssh -G`
     # не нужен. Нераспознанный jump делает всю группу за ним недоступной.
-    statuses: dict[str, Availability] = {}
-    probes = []
     for alias, group in behind.items():
         via = known.get(alias) or resolve(alias, s.ssh_g_timeout)
         if via is None:
-            statuses |= {h.alias: UNAVAILABLE for h in group}
+            statuses |= dict.fromkeys((h.alias for h in group), "unavailable")
         else:
-            probes.append((via, group))
+            probes.append(partial(_probe_via, via, group, s))
 
-    with ThreadPoolExecutor(max_workers=len(direct) + len(probes) or 1) as pool:
-        futures = [pool.submit(_probe_direct, h, s) for h in direct]
-        futures += [pool.submit(_probe_via, via, group, s) for via, group in probes]
-        for future in futures:
-            statuses |= future.result()
+    for result in fan_out(lambda probe: probe(), probes):
+        statuses |= result
+    log.debug("пробы: %s", statuses)
     return statuses
 
 

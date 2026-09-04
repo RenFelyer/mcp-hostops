@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ...core.schemas import Checked, KnownSource
+
 # Где искать: в оглавлении или во всей документации одним файлом.
 SearchScope = Literal["index", "full"]
 
@@ -11,28 +13,20 @@ SearchScope = Literal["index", "full"]
 SourceState = Literal["ok", "unavailable", "stub"]
 
 
-class KnownSource(BaseModel):
-    """Источник из реестра: где индекс и что он покрывает."""
-
-    domain: str = Field(description="как называть источник в llms_index/llms_search")
-    index: str = Field(description="адрес `llms.txt`")
-    covers: str
-    full: str = Field(default="", description="адрес `llms-full.txt`, если известен")
-    full_size: str = Field(default="", description="размер full-файла, чтобы не читать целиком")
-    default: bool = Field(default=False, description="встроенный; удалить нельзя")
-
-
-class SourceStatus(KnownSource):
-    """Источник с итогом последней проверки."""
+class SourceVerdict(BaseModel):
+    """Итог проверки источника; в таком виде хранится в файле итогов."""
 
     state: SourceState
     detail: str = Field(description="код ответа или причина; пусто при ok")
 
 
-class SourcesResult(BaseModel):
+class SourceStatus(KnownSource, SourceVerdict):
+    """Источник с итогом последней проверки."""
+
+
+class SourcesResult(Checked):
     """Ответ `llms_sources`: проверенный реестр и известные имена вариантов."""
 
-    checked_ago: float = Field(description="возраст проверки, секунды")
     sources: list[SourceStatus]
     variants: list[str] = Field(description="имена файлов, которые llms_index ищет на домене")
 
@@ -46,6 +40,13 @@ class IndexEntry(BaseModel):
     section: str = Field(description="заголовок раздела индекса; пусто вне разделов")
 
 
+class Variant(BaseModel):
+    """Файл, найденный рядом с индексом."""
+
+    name: str
+    size: int | None = Field(description="байт по Content-Length; null — сервер не сообщил")
+
+
 class LlmsIndex(BaseModel):
     """Ответ `llms_index`: разобранное оглавление и что ещё лежит на домене."""
 
@@ -54,14 +55,13 @@ class LlmsIndex(BaseModel):
     summary: str
     entries: list[IndexEntry]
     full_url: str = Field(description="адрес `llms-full.txt`, если индекс его называет")
-    variants: list[str] = Field(description="варианты файлов, найденные рядом с индексом")
+    variants: list[Variant] = Field(default_factory=list, description="файлы, найденные рядом с индексом")
 
 
 class SearchHit(BaseModel):
     """Одно совпадение `llms_search`."""
 
     domain: str
-    scope: SearchScope
     title: str = Field(description="запись индекса или заголовок раздела full-файла")
     url: str
     text: str = Field(description="описание записи или фрагмент раздела")

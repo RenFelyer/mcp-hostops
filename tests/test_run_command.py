@@ -1,10 +1,14 @@
-"""Регресс: run_command сохраняет вывод при таймауте."""
+"""run_command: вывод при таймауте сохраняется, потолок таймаута — ошибка вызова."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from pathlib import Path
+from types import TracebackType
 
 import anyio
 import pytest
 
+from mcp_openssh_connector.core.config.environment import get_settings
+from mcp_openssh_connector.core.errors import UserError
 from mcp_openssh_connector.core.schemas import Host
 from mcp_openssh_connector.routers.commands import services
 from mcp_openssh_connector.routers.commands.schemas import RunResult
@@ -48,7 +52,9 @@ class _FakeProcess:
     async def __aenter__(self) -> "_FakeProcess":
         return self
 
-    async def __aexit__(self, *_exc: object) -> None:
+    async def __aexit__(
+        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
+    ) -> None:
         self.kill()
 
     async def wait(self) -> int:
@@ -66,16 +72,26 @@ class _FakeProcess:
             self.returncode = -9
 
 
-def test_run_command_keeps_output_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def fake_ssh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    """Процесс и хост подменены; runtime-каталог — временный, настройки заново."""
+
     async def fake_open(_argv: list[str]) -> _FakeProcess:
         return _FakeProcess()
 
     async def fake_require(alias: str) -> Host:
         return Host(alias=alias, hostname="127.0.0.1", user="u", port=22, proxyjump="")
 
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(anyio, "open_process", fake_open)
     monkeypatch.setattr(services, "require_host", fake_require)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
+
+@pytest.mark.usefixtures("fake_ssh")
+def test_run_command_keeps_output_on_timeout() -> None:
     async def scenario() -> RunResult:
         return await services.run_command("h", "echo x; sleep 99", "/work", 0.3, "false", None)
 
@@ -83,3 +99,12 @@ def test_run_command_keeps_output_on_timeout(monkeypatch: pytest.MonkeyPatch) ->
     assert result.timed_out is True
     assert result.exit_code is None
     assert "partial-output" in result.stdout  # вывод до таймаута не потерян
+
+
+@pytest.mark.usefixtures("fake_ssh")
+def test_run_command_rejects_timeout_above_cap() -> None:
+    async def scenario() -> RunResult:
+        return await services.run_command("h", "true", "~", 1e9, "false", None)
+
+    with pytest.raises(UserError, match="потолка"):
+        anyio.run(scenario)

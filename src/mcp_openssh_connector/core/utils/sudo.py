@@ -1,30 +1,28 @@
 """Разбор sudo в команде, чтение пароля и его маскировка.
 
-Пароль хоста лежит в `~/.ssh/<alias>.secret` (права 0600) и читается только в
-момент вызова, не кэшируется. Если в команде есть sudo, сервер прайминг-строкой
-`sudo -S -p '' -v` скармливает пароль первой строкой stdin и кладёт тикет в кэш;
-дальше исходная команда идёт без изменений, а её sudo берут тикет уже без
-запроса. В любом выводе пароль заменяется на `***`.
+Пароль хоста лежит в `~/.ssh/<alias>.secret` (права 0600, наш файл) и читается
+только в момент вызова, не кэшируется. Если в команде есть sudo, сервер шлёт
+пароль первой строкой stdin, а удалённый скрипт (`ssh.remote_script`) отдаёт
+эту строку одному вызову `sudo -v`, который кладёт тикет в кэш; дальше исходная
+команда идёт без изменений, а её sudo берут тикет уже без запроса. В любом
+выводе строка, равная паролю, заменяется на `***`.
+
+Разбор команды — эвристика для режима «решить по команде»: ищем sudo/doas в
+позиции глагола, в том числе за обёртками вроде `env` или `timeout` и внутри
+`sh -c '…'`. Подстановки `$(…)` и обратные кавычки не разбираются — там sudo
+задаётся явно через параметр `sudo`.
 """
 
+import os
 import shlex
 import stat
 from collections.abc import Iterator
 from pathlib import Path
 
-from ..config import Settings
+from ..config.constants import SHELLS, SUDO_MASK, SUDO_WRAPPERS
+from ..config.environment import Settings
 from ..errors import UserError
 from ..schemas import SudoMode
-
-MASK = "***"
-
-# Обёртки, за которыми стоит настоящая команда: их и их опции пропускаем, чтобы
-# добраться до глагола. Сам sudo/doas сюда не входят — их и надо распознать.
-_SKIP_WRAPPERS = frozenset({"env", "nohup", "time", "command", "exec"})
-_WRAPPER_VALUED = frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U"})
-# Оболочки, у которых `-c '<код>'` запускает вложенную команду: в неё надо
-# заглянуть, иначе sudo внутри `sh -c '…'` останется незамеченным.
-_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ash", "ksh", "mksh", "fish"})
 
 
 class SudoError(UserError):
@@ -45,7 +43,11 @@ def _split(text: str) -> list[str]:
 
 
 def _simple_commands(script: str) -> Iterator[str]:
-    """Простые команды скрипта: разрез по `;`, `&&`, `||`, `|` вне кавычек."""
+    """Простые команды скрипта: разрез по `;`, `&&`, `||`, `|`, `&` вне кавычек.
+
+    Одиночный `&` — тоже разделитель (фоновая команда), кроме перенаправлений
+    `>&`, `<&` и `&>`.
+    """
     quote = ""
     start = 0
     i = 0
@@ -61,8 +63,9 @@ def _simple_commands(script: str) -> Iterator[str]:
         elif ch in "'\"":
             quote = ch
         elif ch in ";|&":
-            if ch == "&" and script[i + 1 : i + 2] != "&":
-                i += 1  # одиночный `&` — фон или `2>&1`, не разделитель
+            redirect = ch == "&" and (script[i - 1 : i] in ("<", ">") or script[i + 1 : i + 2] == ">")
+            if redirect:
+                i += 1
                 continue
             yield script[start:i]
             while i < len(script) and script[i] in ";|&":
@@ -73,48 +76,63 @@ def _simple_commands(script: str) -> Iterator[str]:
     yield script[start:]
 
 
+def _basename(token: str) -> str:
+    return token.rsplit("/", 1)[-1]
+
+
 def _verb(tokens: list[str]) -> tuple[str, list[str]]:
-    """Глагол и его аргументы после снятия присваиваний и обёрток (env, nohup…)."""
+    """Глагол и его аргументы после снятия присваиваний и обёрток."""
     i = 0
     while i < len(tokens):
         tok = tokens[i]
         if _is_assignment(tok):
             i += 1
             continue
-        if tok.rsplit("/", 1)[-1] in _SKIP_WRAPPERS:
-            i += 1
-            while i < len(tokens) and tokens[i].startswith("-"):
-                i += 2 if tokens[i] in _WRAPPER_VALUED else 1
-            continue
-        return tok.rsplit("/", 1)[-1], tokens[i + 1 :]
+        wrapper = SUDO_WRAPPERS.get(_basename(tok))
+        if wrapper is None:
+            return _basename(tok), tokens[i + 1 :]
+        valued, positional = wrapper
+        i += 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            i += 2 if tokens[i] in valued else 1
+        i += positional
     return "", []
 
 
-def uses_sudo(command: str) -> bool:
-    """Есть ли sudo/doas в позиции глагола.
+def _inline_code(args: list[str]) -> str | None:
+    """Код после `-c` у оболочки; флаг может быть склеен (`-lc`, `-xec`).
 
-    Смотрим каждую простую команду и рекурсивно — код внутри `<shell> -c '…'`:
-    `bash -c 'sudo …'` тоже должна быть распознана, иначе sudo в ней останется
-    без пароля.
+    `-o` берёт отдельное значение (`bash -o pipefail -c '…'`), остальные флаги
+    без него.
     """
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        flag = args[i]
+        if flag == "-o":
+            i += 2
+            continue
+        if not flag.startswith("--") and "c" in flag[1:]:
+            return args[i + 1] if i + 1 < len(args) else None
+        i += 1
+    return None
+
+
+def uses_sudo(command: str) -> bool:
+    """Есть ли sudo/doas в позиции глагола, в том числе внутри `<shell> -c '…'`."""
     for simple in _simple_commands(command):
         verb, args = _verb(_split(simple))
         if verb in ("sudo", "doas"):
             return True
-        if verb in _SHELLS and "-c" in args:
-            inner = args[args.index("-c") + 1 :]
-            if inner and uses_sudo(inner[0]):
-                return True
+        if verb in SHELLS and (inner := _inline_code(args)) is not None and uses_sudo(inner):
+            return True
     return False
 
 
 def decide_prime(command: str, sudo_mode: SudoMode) -> bool:
     """Нужен ли прайминг пароля: auto решает по команде, true/false — принудительно."""
-    if sudo_mode == "true":
-        return True
-    if sudo_mode == "false":
-        return False
-    return uses_sudo(command)
+    if sudo_mode == "auto":
+        return uses_sudo(command)
+    return sudo_mode == "true"
 
 
 def read_secret(alias: str, s: Settings) -> str:
@@ -123,21 +141,23 @@ def read_secret(alias: str, s: Settings) -> str:
     В сообщение об ошибке попадает только путь, но не содержимое.
 
     Raises:
-        SudoError: файла нет, это не обычный файл, права не 0600 или алиас
-            выводит путь за пределы каталога секретов (защита от `../`).
+        SudoError: алиас выводит путь за пределы каталога секретов, файла нет
+            или он не читается, это не обычный наш файл или права не 0600.
     """
     path: Path = s.secret_file(alias)
-    if path.resolve().parent != s.secret_dir.resolve():
+    # Алиас с `/` или `..` увёл бы путь из каталога секретов; сравнение без
+    # обращения к диску, так что своя ссылка на файл в другом месте допустима.
+    if path.parent != s.secret_dir:
         raise SudoError(f"алиас ведёт за пределы каталога секретов: {alias!r}")
     try:
         info = path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise SudoError(f"файл с паролем должен быть нашим обычным файлом: {path}")
+        if info.st_mode & 0o077:
+            raise SudoError(f"у файла с паролем небезопасные права, нужно 0600: {path}")
+        return path.read_text(encoding="utf-8").rstrip("\r\n")
     except OSError as err:
         raise SudoError(f"нет файла с паролем: {path} ({err.strerror})") from err
-    if not stat.S_ISREG(info.st_mode):
-        raise SudoError(f"файл с паролем не обычный файл: {path}")
-    if info.st_mode & 0o077:
-        raise SudoError(f"у файла с паролем небезопасные права, нужно 0600: {path}")
-    return path.read_text(encoding="utf-8").rstrip("\n")
 
 
 def mask(text: str, password: str | None) -> str:
@@ -149,4 +169,4 @@ def mask(text: str, password: str | None) -> str:
     """
     if not password:
         return text
-    return "\n".join(MASK if line.strip("\r") == password else line for line in text.split("\n"))
+    return "\n".join(SUDO_MASK if line.strip("\r") == password else line for line in text.split("\n"))

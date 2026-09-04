@@ -5,9 +5,11 @@ try:
 except ImportError:
     from asyncio import run as run_loop
 
+from .core.config import logger
 from .core.server import mcp
 
 
 def main() -> None:
     """Запустить сервер по stdio и работать до закрытия транспорта."""
+    logger.setup()
     run_loop(mcp.run_async(transport="stdio", show_banner=False))

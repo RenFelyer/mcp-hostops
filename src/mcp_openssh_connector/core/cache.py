@@ -1,33 +1,32 @@
-"""Кэш статусов доступности хостов: JSON в runtime-каталоге.
+"""Кэш статусов доступности хостов: JSON с отметкой времени в runtime-каталоге.
 
-Формат: `{"checked_at": <epoch>, "hosts": {<alias>: <status>}}`. Кэш — это
-оптимизация: при любой ошибке ввода-вывода сервер просто мерит заново.
+Кэш — это оптимизация: при любой ошибке ввода-вывода или мусоре в файле сервер
+просто мерит заново.
 """
 
 import contextlib
 from collections.abc import Mapping
-from math import inf
-from time import time
 
 from . import store
-from .config import Settings
+from .config.environment import Settings
+from .schemas import Availability, as_availability
 
 
-def read(s: Settings) -> tuple[float, dict[str, str]]:
+def read(s: Settings) -> tuple[float, dict[str, Availability]]:
     """Прочитать кэш.
 
     Returns:
-        Возраст записи в секундах и статусы по алиасам. Возраст `inf` — кэша
-        нет или он битый.
+        Возраст записи в секундах и статусы по алиасам; чужое значение в файле
+        читается как «unknown». Возраст `inf` — кэша нет или он битый.
     """
-    data = store.load(s.cache_file) or {}
-    try:
-        return time() - float(data["checked_at"]), dict(data["hosts"])
-    except (ValueError, KeyError, TypeError):
-        return inf, {}
+    age, data = store.load_stamped(s.cache_file)
+    hosts = data.get("hosts")
+    if not isinstance(hosts, Mapping):
+        return age, {}
+    return age, {alias: as_availability(status) for alias, status in hosts.items()}
 
 
-def write(statuses: Mapping[str, str], s: Settings) -> None:
+def write(statuses: Mapping[str, Availability], s: Settings) -> None:
     """Записать статусы; ошибка ввода-вывода молча глотается."""
     with contextlib.suppress(OSError):
-        store.save(s.cache_file, {"checked_at": time(), "hosts": dict(statuses)})
+        store.save_stamped(s.cache_file, {"hosts": dict(statuses)})

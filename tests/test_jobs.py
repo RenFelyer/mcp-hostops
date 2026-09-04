@@ -1,32 +1,54 @@
-"""Регресс: snapshot отдаёт прирост вывода и не теряет его при свопе буфера."""
+"""Реестр задач: прирост вывода, потолок буфера, маскировка, история."""
 
 import anyio
+import pytest
 
+from mcp_openssh_connector.core.config.environment import get_settings
+from mcp_openssh_connector.core.errors import UserError
 from mcp_openssh_connector.core.utils.ssh import Capture, Output
-from mcp_openssh_connector.routers.jobs.schemas import JobRef
+from mcp_openssh_connector.routers.jobs.schemas import JobRef, JobStatus
 from mcp_openssh_connector.routers.jobs.services import Job, JobManager
+
+
+def _job(job_id: str, status: JobStatus = "done") -> Job:
+    return Job(
+        ref=JobRef(id=job_id, host="h", command="c", cwd="/w", status=status),
+        capture=Capture(1000, None),
+    )
 
 
 def test_snapshot_returns_delta_and_swaps_buffer() -> None:
     manager = JobManager()
-    job = Job(
-        ref=JobRef(id="1", host="h", command="c", cwd="/w", status="done"),
-        capture=Capture(1000, None),
-    )
+    job = _job("1")
     job.capture.stdout.feed(b"first")
     manager._jobs["1"] = job
 
     async def scenario() -> tuple[str, str]:
         snap1 = await manager.snapshot("1", 0.0)
-        assert snap1 is not None
         job.capture.stdout.feed(b"second")  # новый вывод после чтения
         snap2 = await manager.snapshot("1", 0.0)
-        assert snap2 is not None
         return snap1.stdout, snap2.stdout
 
     first, second = anyio.run(scenario)
     assert first == "first"
     assert second == "second"  # только прирост, «first» не повторился и не потерялся
+
+
+def test_snapshot_unknown_job_is_user_error() -> None:
+    manager = JobManager()
+    with pytest.raises(UserError, match="не найдена"):
+        anyio.run(manager.snapshot, "nope", 0.0)
+    assert manager.kill("nope") is False
+
+
+def test_history_keeps_recent_finished_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(get_settings(), "job_history", 2)
+    manager = JobManager()
+    for job_id in ("1", "2", "3"):
+        manager._jobs[job_id] = _job(job_id)
+    manager._jobs["4"] = _job("4", status="running")
+    manager._forget_old()
+    assert [ref.id for ref in manager.listing()] == ["2", "3", "4"]  # живая остаётся всегда
 
 
 def test_output_limit_marks_truncation() -> None:

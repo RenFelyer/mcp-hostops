@@ -1,12 +1,24 @@
-"""JSON-файлы состояния: чтение с терпимостью к мусору и атомарная запись."""
+"""Файлы состояния и приватные каталоги.
+
+Чтение терпимо к мусору: битый файл равен отсутствующему. Запись атомарна —
+через уникальный временный файл в том же каталоге и `replace`, так что два
+сервера, пишущие одновременно, не портят файл друг другу, а читатель никогда не
+видит файл, записанный наполовину.
+"""
 
 import json
+import os
+import stat
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from time import time
+
+from .config.constants import PRIVATE_DIR_MODE
+from .schemas import Json
 
 
-def load(path: Path) -> dict[str, Any] | None:
+def load(path: Path) -> dict[str, Json] | None:
     """Прочитать JSON-объект; None — файла нет, он битый или это не объект."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -15,13 +27,66 @@ def load(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def save(path: Path, data: Mapping[str, Any]) -> None:
-    """Записать атомарно через временный файл и `replace`; ошибки — наружу.
+def write_bytes(path: Path, data: bytes) -> None:
+    """Записать байты атомарно; ошибки — наружу.
 
     Raises:
         OSError: каталог недоступен или диск не принял запись.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as file:
+            file.write(data)
+        Path(tmp).replace(path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def save(path: Path, data: Mapping[str, Json]) -> None:
+    """Записать JSON-объект атомарно; ошибки — наружу.
+
+    Raises:
+        OSError: каталог недоступен или диск не принял запись.
+    """
+    write_bytes(path, json.dumps(data, ensure_ascii=False).encode())
+
+
+def load_stamped(path: Path) -> tuple[float, dict[str, Json]]:
+    """Прочитать запись с отметкой времени.
+
+    Returns:
+        Возраст записи в секундах и её содержимое без отметки. Возраст `inf` и
+        пустое содержимое — файла нет, он битый или отметка не число.
+    """
+    data = load(path) or {}
+    checked_at = data.pop("checked_at", None)
+    if not isinstance(checked_at, int | float):
+        return float("inf"), {}
+    return time() - checked_at, data
+
+
+def save_stamped(path: Path, data: Mapping[str, Json]) -> None:
+    """Записать содержимое с текущей отметкой времени; ошибки — наружу."""
+    save(path, {"checked_at": time(), **data})
+
+
+def private_dir(path: Path) -> Path:
+    """Создать каталог 0700 и убедиться, что он наш и закрыт от других.
+
+    Нужен там, где чужой каталог опасен: сокет ControlMaster в подставленном
+    каталоге отдал бы соединение и пароль sudo чужому процессу. Проверяется сам
+    путь, без перехода по символической ссылке: подставленная ссылка увела бы
+    сокеты в каталог, выбранный не нами.
+
+    Raises:
+        PermissionError: путь — не каталог (в том числе ссылка), принадлежит не
+            нам или открыт группе/остальным.
+        OSError: каталог не создаётся.
+    """
+    path.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise PermissionError(f"каталог {path} должен быть нашим, не ссылкой и с правами 0700")
+    return path

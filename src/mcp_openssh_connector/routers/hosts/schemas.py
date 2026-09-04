@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from ...core.schemas import Availability, Host
+from ...core.schemas import Availability, Checked, Host
 
 
 class HostStatus(Host):
@@ -11,10 +11,9 @@ class HostStatus(Host):
     status: Availability
 
 
-class ListHostsResult(BaseModel):
+class ListHostsResult(Checked):
     """Ответ `list_hosts`."""
 
-    checked_ago: float = Field(description="возраст данных о доступности, секунды")
     hosts: list[HostStatus]
 
 
@@ -23,4 +22,4 @@ class CheckResult(BaseModel):
 
     alias: str
     status: Availability
-    detail: str = Field(description="причина отказа или пояснение; пусто при мелкой пробе")
+    detail: str = Field(description="причина отказа входа при deep или пояснение к unknown; иначе пусто")

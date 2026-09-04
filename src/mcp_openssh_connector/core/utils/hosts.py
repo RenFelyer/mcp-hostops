@@ -10,20 +10,16 @@
 """
 
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import anyio.to_thread
 
-from ..config import get_settings
+from ..config.constants import SSH_CONFIG, SSH_DIR
+from ..config.environment import get_settings
 from ..errors import UserError
 from ..schemas import Host
+from .parallel import fan_out
 from .ssh import run_sync
-
-SSH_DIR = Path.home() / ".ssh"
-SSH_CONFIG = SSH_DIR / "config"
-
-_MAX_RESOLVERS = 16  # параллельных `ssh -G` при перечислении
 
 
 def pairs(text: str) -> dict[str, str]:
@@ -55,6 +51,11 @@ def _expand_include(pattern: str) -> list[Path]:
     return sorted(m for m in matches if not _hidden_by_wildcard(base, m))
 
 
+def _is_alias(word: str) -> bool:
+    """Имя хоста, а не маска (`*`, `?`) и не отрицание (`!`)."""
+    return not word.startswith("!") and "*" not in word and "?" not in word
+
+
 def _scan_aliases(config: Path, names: list[str], seen: set[Path]) -> None:
     """Добавить имена Host из файла и его `Include`; циклы отсекаются по `seen`."""
     try:
@@ -66,12 +67,13 @@ def _scan_aliases(config: Path, names: list[str], seen: set[Path]) -> None:
     except OSError:
         return
     for line in text.splitlines():
-        words = line.partition("#")[0].split()
+        # ssh допускает и `Host x`, и `Host=x`; хвостовой `#` он отбрасывает.
+        words = line.partition("#")[0].replace("=", " ", 1).split()
         if len(words) <= 1:
             continue
         keyword = words[0].lower()
         if keyword == "host":
-            names += [w for w in words[1:] if "*" not in w and "?" not in w]
+            names += filter(_is_alias, words[1:])
         elif keyword == "include":
             for pattern in words[1:]:
                 for included in _expand_include(pattern):
@@ -87,7 +89,7 @@ def read_aliases(config: Path = SSH_CONFIG) -> list[str]:
         config: Файл конфига; по умолчанию `~/.ssh/config`.
 
     Returns:
-        Имена в порядке появления, без дублей и без масок.
+        Имена в порядке появления, без дублей, масок и отрицаний.
     """
     names: list[str] = []
     _scan_aliases(config, names, set())
@@ -97,13 +99,14 @@ def read_aliases(config: Path = SSH_CONFIG) -> list[str]:
 def resolve(alias: str, timeout: float) -> Host | None:
     """Параметры хоста глазами ssh.
 
-    `ssh -G` раскрывает наследование из `Host *`, `Include` и `Match`.
+    `ssh -G` раскрывает наследование из `Host *`, `Include` и `Match`. `--`
+    перед алиасом не даёт имени, начинающемуся с `-`, стать опцией ssh.
 
     Returns:
         Хост или None, если ssh не ответил, упал или не уложился в `timeout`.
     """
     try:
-        done = run_sync(["ssh", "-G", alias], timeout)
+        done = run_sync(["ssh", "-G", "--", alias], timeout)
         # `ssh -G` печатает без отступов и всегда в нижнем регистре.
         fields = pairs(done.stdout) if done.returncode == 0 else {}
         port = int(fields["port"])
@@ -118,25 +121,26 @@ def resolve(alias: str, timeout: float) -> Host | None:
     )
 
 
-def discover(timeout: float) -> list[Host]:
-    """Хосты конфига с уже вычисленными параметрами, в порядке конфига."""
-    names = read_aliases()
-    if not names:
-        return []
-    with ThreadPoolExecutor(max_workers=min(len(names), _MAX_RESOLVERS)) as pool:
-        resolved = pool.map(lambda name: resolve(name, timeout), names)
-        return [host for host in resolved if host]
+def _resolve_all(aliases: list[str], timeout: float) -> dict[str, Host]:
+    """`ssh -G` для каждого алиаса параллельно; не разобранные в ответ не попадают."""
+    resolved = fan_out(lambda alias: resolve(alias, timeout), aliases)
+    return {host.alias: host for host in resolved if host}
 
 
-def host_detail(alias: str, timeout: float) -> Host | None:
-    """Параметры хоста, только если алиас описан в конфиге; иначе None.
+def resolve_known(aliases: list[str], timeout: float) -> dict[str, Host]:
+    """Параметры тех из `aliases`, что описаны в конфиге.
 
     `ssh -G` успешен для любого имени, поэтому членство в конфиге — единственный
-    способ отличить наш алиас от произвольного.
+    способ отличить наш алиас от произвольного. Чужие и не разобранные алиасы в
+    ответ не попадают.
     """
-    if alias not in read_aliases():
-        return None
-    return resolve(alias, timeout)
+    known = set(read_aliases())
+    return _resolve_all([alias for alias in dict.fromkeys(aliases) if alias in known], timeout)
+
+
+def discover(timeout: float) -> list[Host]:
+    """Хосты конфига с уже вычисленными параметрами, в порядке конфига."""
+    return list(_resolve_all(read_aliases(), timeout).values())
 
 
 async def require_host(alias: str) -> Host:
@@ -147,7 +151,7 @@ async def require_host(alias: str) -> Host:
             хостами из конфига.
     """
     timeout = get_settings().ssh_g_timeout
-    host = await anyio.to_thread.run_sync(host_detail, alias, timeout)
-    if host is None:
+    hosts = await anyio.to_thread.run_sync(resolve_known, [alias], timeout)
+    if alias not in hosts:
         raise UserError(f"хост {alias!r} не описан в ~/.ssh/config")
-    return host
+    return hosts[alias]

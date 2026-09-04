@@ -1,4 +1,4 @@
-"""Сервис роутера llms.txt: скачивание с кэшем, проверка домена, разбор, поиск.
+"""Сервис роутера llms.txt: скачивание с кэшем, проверка, разбор, поиск, реестр.
 
 Сеть здесь асинхронная (`httpx2.AsyncClient`), поток не нужен. Всё скачанное
 ложится в кэш на диске с TTL: индекс и страницы перечитываются редко, а
@@ -11,6 +11,7 @@
 рядом с ним; текстовый ответ — документ, что бы домен ни отдавал на мусор.
 """
 
+import contextlib
 import hashlib
 import json
 import re
@@ -23,18 +24,23 @@ import anyio
 import httpx2
 from pydantic import BaseModel
 
+from ...core import store
 from ...core.config import Settings, get_settings
 from ...core.errors import UserError
+from . import sources
 from .schemas import (
     IndexEntry,
+    KnownSource,
     LlmsIndex,
     Page,
     SearchHit,
     SearchResult,
     SearchScope,
     SourcesResult,
+    SourceState,
+    SourceStatus,
 )
-from .sources import ABSENT, KNOWN, VARIANTS
+from .sources import VARIANTS
 
 _HTTP_ERROR = 400  # с этого кода ответ — ошибка
 _JUNK_NAME = "zzz-nope-12345.txt"  # стабильное имя, чтобы проба кэшировалась
@@ -66,31 +72,24 @@ def make_client(s: Settings) -> httpx2.AsyncClient:
     )
 
 
-def sources() -> SourcesResult:
-    """Реестр известных источников и имена вариантов файлов."""
-    return SourcesResult(known=list(KNOWN), absent=list(ABSENT), variants=list(VARIANTS))
-
-
-def index_url(source: str) -> str:
+def index_url(source: str, s: Settings) -> str:
     """Адрес индекса: из реестра по домену, иначе из того, что назвал клиент.
 
     Клиент может назвать домен (`docs.astral.sh/uv`), домен с путём или адрес
     файла целиком.
     """
-    for known in KNOWN:
-        if source in (known.domain, known.index):
-            return known.index
+    if (known := sources.find(source, s)) is not None:
+        return known.index
     url = source if "://" in source else f"https://{source}"
     if not url.endswith(".txt"):
         url = url.rstrip("/") + "/" + _INDEX_NAME
     return url
 
 
-def domain_of(url: str) -> str:
+def domain_of(url: str, s: Settings) -> str:
     """Имя источника для ответов: домен из реестра или хост адреса."""
-    for known in KNOWN:
-        if url == known.index:
-            return known.domain
+    if (known := sources.find(url, s)) is not None:
+        return known.domain
     return urlsplit(url).hostname or url
 
 
@@ -114,24 +113,23 @@ def _cached(method: str, url: str, s: Settings) -> Fetched | None:
 
 def _store(method: str, url: str, fetched: Fetched, s: Settings) -> None:
     body_path, meta_path = _cache_paths(method, url, s)
-    try:
+    with contextlib.suppress(OSError):
         body_path.parent.mkdir(parents=True, exist_ok=True)
         body_path.write_bytes(fetched.body)
         meta_path.write_text(json.dumps(fetched.model_dump(exclude={"body"})), encoding="utf-8")
-    except OSError:
-        pass
 
 
-async def fetch(url: str, s: Settings, method: str = "GET") -> Fetched:
+async def fetch(url: str, s: Settings, method: str = "GET", *, cache: bool = True) -> Fetched:
     """Скачать ресурс с кэшем и потолком размера.
 
     Код ответа возвращается, а не превращается в ошибку: проверке домена нужен
-    и 404. HEAD тела не тянет — им проверяется наличие вариантов файлов.
+    и 404. HEAD тела не тянет — им проверяется наличие файлов. `cache=False`
+    минует кэш на диске: так проверяют, что источник жив сейчас.
 
     Raises:
         UserError: сеть недоступна, таймаут или тело больше `llms_max_bytes`.
     """
-    if (hit := _cached(method, url, s)) is not None:
+    if cache and (hit := _cached(method, url, s)) is not None:
         return hit
     body = bytearray()
     try:
@@ -147,7 +145,8 @@ async def fetch(url: str, s: Settings, method: str = "GET") -> Fetched:
             )
     except httpx2.HTTPError as err:
         raise UserError(f"не удалось скачать {url}: {err}") from err
-    _store(method, url, fetched, s)
+    if cache:
+        _store(method, url, fetched, s)
     return fetched
 
 
@@ -240,10 +239,109 @@ def parse_index(text: str, base_url: str) -> LlmsIndex:
 
 async def load_index(source: str, s: Settings) -> LlmsIndex:
     """Индекс источника: проверка домена, скачивание, разбор, варианты рядом."""
-    url = index_url(source)
+    url = index_url(source, s)
     index = parse_index((await fetch_ok(url, s)).text, url)
     index.variants = await present_variants(url, s)
     return index
+
+
+async def _check(known: KnownSource, s: Settings) -> SourceStatus:
+    """Жив ли источник сейчас: HEAD индекса мимо кэша, при HTML — мусорная проба."""
+    state: SourceState = "ok"
+    detail = ""
+    try:
+        head = await fetch(known.index, s, "HEAD", cache=False)
+        if head.status >= _HTTP_ERROR:
+            state, detail = "unavailable", f"HTTP {head.status}"
+        elif _looks_html(head):
+            junk = await fetch(urljoin(known.index, _JUNK_NAME), s, "HEAD", cache=False)
+            state = "stub" if junk.status < _HTTP_ERROR else "unavailable"
+            detail = "вместо индекса HTML-оболочка"
+    except UserError as err:
+        state, detail = "unavailable", str(err)
+    return SourceStatus(**known.model_dump(), state=state, detail=detail)
+
+
+def _forget_status(s: Settings) -> None:
+    """Сбросить итоги проверки: состав реестра изменился."""
+    with contextlib.suppress(OSError):
+        s.llms_status_file.unlink()
+
+
+async def verify_sources(s: Settings, *, refresh: bool = False) -> SourcesResult:
+    """Все источники с итогом проверки; итоги лежат в runtime-каталоге до TTL.
+
+    Runtime-каталог живёт до перезагрузки машины, но переживает перезапуск
+    сервера: между сессиями источники заново не опрашиваются. Опрашиваются все
+    разом, мимо кэша скачивания.
+    """
+    saved = store.load(s.llms_status_file) or {}
+    checked_at = float(saved.get("checked_at", 0))
+    known = sources.all_sources(s)
+    rows = saved.get("sources", {})
+    fresh = not refresh and time.time() - checked_at < s.llms_status_ttl and all(item.domain in rows for item in known)
+    if fresh:
+        statuses = [SourceStatus(**item.model_dump(), **rows[item.domain]) for item in known]
+        return SourcesResult(
+            checked_ago=time.time() - checked_at,
+            sources=statuses,
+            variants=list(VARIANTS),
+        )
+
+    results: dict[str, SourceStatus] = {}
+
+    async def check(item: KnownSource) -> None:
+        results[item.domain] = await _check(item, s)
+
+    async with anyio.create_task_group() as tg:
+        for item in known:
+            tg.start_soon(check, item)
+    statuses = [results[item.domain] for item in known]
+    with contextlib.suppress(OSError):
+        store.save(
+            s.llms_status_file,
+            {
+                "checked_at": time.time(),
+                "sources": {st.domain: {"state": st.state, "detail": st.detail} for st in statuses},
+            },
+        )
+    return SourcesResult(checked_ago=0.0, sources=statuses, variants=list(VARIANTS))
+
+
+async def add_source(domain: str, covers: str, index: str | None, s: Settings) -> SourceStatus:
+    """Проверить источник по сети, добавить в пользовательский файл и вернуть.
+
+    Индекс скачивается целиком: он должен быть текстом с хотя бы одной ссылкой.
+    `llms-full.txt` рядом определяется сам.
+
+    Raises:
+        UserError: домен уже есть, индекса нет, это заглушка или в нём нет ссылок.
+        OSError: файл источников не записался.
+    """
+    if sources.find(domain, s) is not None:
+        raise UserError(f"источник {domain!r} уже есть")
+    url = index_url(index or domain, s)
+    parsed = parse_index((await fetch_ok(url, s)).text, url)
+    if not parsed.entries:
+        raise UserError(f"{url}: в индексе нет ни одной ссылки — это не llms.txt")
+    variants = await present_variants(url, s)
+    full = urljoin(url, _FULL_NAME) if _FULL_NAME in variants else ""
+    known = KnownSource(domain=domain, index=url, covers=covers, full=full)
+    sources.add(known, s)
+    _forget_status(s)
+    return SourceStatus(**known.model_dump(), state="ok", detail="")
+
+
+def remove_source(domain: str, s: Settings) -> KnownSource:
+    """Удалить пользовательский источник; встроенный удалить нельзя.
+
+    Raises:
+        UserError: источник встроенный или его нет.
+        OSError: файл источников не записался.
+    """
+    removed = sources.remove(domain, s)
+    _forget_status(s)
+    return removed
 
 
 def _matches(text: str, words: list[str]) -> bool:
@@ -270,8 +368,8 @@ def sections(text: str) -> list[tuple[str, str]]:
     return result
 
 
-def _index_hits(index: LlmsIndex, words: list[str]) -> list[SearchHit]:
-    domain = domain_of(index.url)
+def _index_hits(index: LlmsIndex, words: list[str], s: Settings) -> list[SearchHit]:
+    domain = domain_of(index.url, s)
     return [
         SearchHit(
             domain=domain,
@@ -291,7 +389,7 @@ async def _full_hits(index: LlmsIndex, words: list[str], s: Settings) -> list[Se
     text = (await fetch_ok(full_url, s)).text
     return [
         SearchHit(
-            domain=domain_of(index.url),
+            domain=domain_of(index.url, s),
             scope="full",
             title=heading,
             url=full_url,
@@ -306,8 +404,9 @@ async def _full_hits(index: LlmsIndex, words: list[str], s: Settings) -> list[Se
 async def search(query: str, source: str | None, scope: SearchScope) -> SearchResult:
     """Найти слова запроса (все, без учёта регистра).
 
-    Без `source` — по оглавлениям всех источников реестра; недоступный источник
-    пропускается и называется в `skipped`, остальные всё равно ищутся.
+    Без `source` — по оглавлениям всех источников реестра, которые последняя
+    проверка признала живыми; остальные и упавшие по пути называются в
+    `skipped`.
 
     Raises:
         UserError: пустой запрос, `full` без источника, либо названный источник
@@ -319,15 +418,20 @@ async def search(query: str, source: str | None, scope: SearchScope) -> SearchRe
         raise UserError("пустой запрос")
     if source is None and scope == "full":
         raise UserError("поиск по full — только с указанным источником")
-    targets = [source] if source is not None else [k.domain for k in KNOWN]
 
     hits: list[SearchHit] = []
     searched: list[str] = []
     skipped: list[str] = []
+    if source is not None:
+        targets = [source]
+    else:
+        verified = (await verify_sources(s)).sources
+        targets = [st.domain for st in verified if st.state == "ok"]
+        skipped += [f"{st.domain}: {st.detail}" for st in verified if st.state != "ok"]
     for target in targets:
         try:
             index = await load_index(target, s)
-            found = _index_hits(index, words) if scope == "index" else await _full_hits(index, words, s)
+            found = _index_hits(index, words, s) if scope == "index" else await _full_hits(index, words, s)
         except UserError as err:
             if source is not None:
                 raise

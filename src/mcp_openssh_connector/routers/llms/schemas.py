@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field
 # Где искать: в оглавлении или во всей документации одним файлом.
 SearchScope = Literal["index", "full"]
 
+# Итог проверки источника: индекс отвечает текстом; не отвечает; HTML-заглушка.
+SourceState = Literal["ok", "unavailable", "stub"]
+
 
 class KnownSource(BaseModel):
     """Источник из реестра: где индекс и что он покрывает."""
@@ -16,20 +19,21 @@ class KnownSource(BaseModel):
     covers: str
     full: str = Field(default="", description="адрес `llms-full.txt`, если известен")
     full_size: str = Field(default="", description="размер full-файла, чтобы не читать целиком")
+    default: bool = Field(default=False, description="встроенный; удалить нельзя")
 
 
-class AbsentSource(BaseModel):
-    """Домен, где `llms.txt` искали и не нашли."""
+class SourceStatus(KnownSource):
+    """Источник с итогом последней проверки."""
 
-    domain: str
-    how: str = Field(description="404 на имена файлов или SPA-заглушка с 200 на любой путь")
+    state: SourceState
+    detail: str = Field(description="код ответа или причина; пусто при ok")
 
 
 class SourcesResult(BaseModel):
-    """Ответ `llms_sources`: реестр и известные имена вариантов."""
+    """Ответ `llms_sources`: проверенный реестр и известные имена вариантов."""
 
-    known: list[KnownSource]
-    absent: list[AbsentSource]
+    checked_ago: float = Field(description="возраст проверки, секунды")
+    sources: list[SourceStatus]
     variants: list[str] = Field(description="имена файлов, которые llms_index ищет на домене")
 
 

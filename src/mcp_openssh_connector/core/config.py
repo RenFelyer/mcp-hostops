@@ -42,10 +42,20 @@ class Settings(BaseSettings):
     llms_page_chars: int = 20_000  # символов страницы за один llms_fetch
     llms_hit_chars: int = 2_000  # символов одного совпадения в llms_search
     llms_max_hits: int = 20  # совпадений за один llms_search
+    llms_status_ttl: float = 86400.0  # секунды, пока проверка источников считается свежей
     # Кэш скачанного — не в runtime-каталоге (tmpfs), а в XDG_CACHE_HOME.
     llms_cache_dir: Path = Field(
         default_factory=lambda: (
             Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "mcp-openssh-connector" / "llms"
+        )
+    )
+
+    # Пользовательские источники llms.txt — переживают перезапуск: XDG_DATA_HOME.
+    llms_sources_file: Path = Field(
+        default_factory=lambda: (
+            Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+            / "mcp-openssh-connector"
+            / "llms-sources.json"
         )
     )
 
@@ -66,6 +76,11 @@ class Settings(BaseSettings):
     def cache_file(self) -> Path:
         """Файл кэша статусов доступности."""
         return self.state_dir / "hosts-status.json"
+
+    @property
+    def llms_status_file(self) -> Path:
+        """Итоги проверки источников llms.txt: живут до перезагрузки машины."""
+        return self.state_dir / "llms-sources-status.json"
 
     @property
     def control_dir(self) -> Path:

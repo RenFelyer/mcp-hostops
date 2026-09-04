@@ -75,14 +75,17 @@ uv run pytest tests/test_x.py::test_name   # один тест
 - `routers/hosts` — `list_hosts`, `check_hosts`, `host_info`. Сервис —
   оркестрация статусов поверх `probe`/`cache`.
 - `routers/commands` — `run`. Сервис — выполнение команды с таймаутом.
-- `routers/llms` — `llms_sources`, `llms_index`, `llms_search`, `llms_fetch`:
-  документация инструментов с их доменов через `llms.txt`. Реестр известных
-  источников и имена вариантов файлов (`llms-full`, `-small`, `-ctx`…) — в
-  `sources.py`; это зеркало `sources.md` скилла `llms-txt`, находки и пустышки
-  записывать в оба места. Поиск без источника идёт по всем известным. Сервис
-  асинхронный на `httpx2` (тот же API, что httpx; его тянет fastmcp), поток не
-  нужен. Всё скачанное — в кэше на диске (`llms_cache_dir`, в `XDG_CACHE_HOME`,
-  а не в tmpfs) с TTL. SPA-заглушка (`UserError`) — это HTML вместо документа
+- `routers/llms` — `llms_sources`, `llms_add_source`, `llms_remove_source`,
+  `llms_index`, `llms_search`, `llms_fetch`: документация инструментов с их
+  доменов через `llms.txt`. Реестр: встроенный список `DEFAULT` в `sources.py`
+  (проверенное, удалить нельзя) плюс пользовательские источники в
+  `llms_sources_file` (`XDG_DATA_HOME`, переживают перезапуск). `llms_sources`
+  перед выдачей опрашивает все источники HEAD-запросом мимо кэша скачивания;
+  итоги — в `llms_status_file` в runtime-каталоге: переживают перезапуск
+  сервера, но не перезагрузку машины, и не старше `llms_status_ttl`. Поиск без
+  источника идёт только по живым. Сервис асинхронный на `httpx2` (тот же API,
+  что httpx; его тянет fastmcp), поток не нужен. Всё скачанное — в кэше на диске
+  (`llms_cache_dir`, в `XDG_CACHE_HOME`, а не в tmpfs) с TTL. SPA-заглушка (`UserError`) — это HTML вместо документа
   при 200 на мусорный URL рядом; текстовый ответ — документ, даже если домен
   отвечает 200 на всё (так устроены docs.claude.com и code.claude.com). `llms-full.txt` в ответ целиком не идёт никогда —
   только совпавшие разделы. Индекс — навигатор, страницы — рекомендации по
@@ -134,7 +137,9 @@ Host из конфига» в OpenSSH нет. Поэтому список чит
 - `core/config.py` — `Settings` (pydantic-settings, префикс `OPENSSH_MCP_`):
   таймауты, пороги, пути. Состояние — в `XDG_RUNTIME_DIR/mcp-openssh-connector`.
   `pty_hosts` в окружении — JSON-список.
-- `core/cache.py` — кэш статусов доступности в runtime-каталоге.
+- `core/store.py` — JSON-файлы состояния: чтение с терпимостью к мусору и
+  атомарная запись. Поверх него `core/cache.py` (статусы хостов) и реестр
+  `llms`.
 - `core/schemas.py` — общее больше чем одному модулю: `Host` (параметры хоста,
   pydantic), `CapturedOutput` (вывод с флагами обрезки — база `RunResult` и
   `JobSnapshot`), `Availability` (статус доступности, `Literal`), `SudoMode`

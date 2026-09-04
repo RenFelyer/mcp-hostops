@@ -17,23 +17,85 @@ from pydantic import Field
 
 from ...core.config import get_settings
 from ...core.schemas import NonEmptyStr
-from .schemas import LlmsIndex, Page, SearchResult, SearchScope, SourcesResult
-from .services import fetch_page, load_index, search, sources
+from .schemas import (
+    KnownSource,
+    LlmsIndex,
+    Page,
+    SearchResult,
+    SearchScope,
+    SourcesResult,
+    SourceStatus,
+)
+from .services import (
+    add_source,
+    fetch_page,
+    load_index,
+    remove_source,
+    search,
+    verify_sources,
+)
 
 router: FastMCP = FastMCP(name="llms", on_duplicate="error")
 
 _READING = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=True)
-_LOCAL = ToolAnnotations(read_only_hint=True, idempotent_hint=True, open_world_hint=False)
 
 
-@router.tool(title="Реестр llms.txt", tags={"llms"}, annotations=_LOCAL)
-async def llms_sources() -> SourcesResult:
-    """Известные источники `llms.txt`: где индекс, что покрывает, есть ли full.
+@router.tool(title="Реестр llms.txt", tags={"llms"}, annotations=_READING)
+async def llms_sources(refresh: bool = False) -> SourcesResult:
+    """Известные источники `llms.txt`, каждый с итогом проверки, что он жив.
 
-    Домен из `absent` второй раз не проверять — там уже искали и не нашли.
-    Отдаёт и имена вариантов файлов, которые llms_index ищет рядом с индексом.
+    Встроенные (default) плюс добавленные через llms_add_source. Перед выдачей
+    все опрашиваются HEAD-запросом мимо кэша; итоги хранятся до перезагрузки
+    машины и не старше TTL, так что повторные вызовы в сеть не ходят. Отдаёт и
+    имена вариантов файлов, которые llms_index ищет рядом с индексом.
+
+    Args:
+        refresh: Опросить заново, не глядя на сохранённые итоги.
     """
-    return sources()
+    return await verify_sources(get_settings(), refresh=refresh)
+
+
+@router.tool(
+    title="Добавить источник llms.txt",
+    tags={"llms"},
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=True,
+    ),
+)
+async def llms_add_source(domain: NonEmptyStr, covers: NonEmptyStr, index: NonEmptyStr | None = None) -> SourceStatus:
+    """Добавить источник в реестр; переживает перезапуск сервера.
+
+    Индекс скачивается и проверяется: должен быть текстом со ссылками, не
+    HTML-заглушкой. Наличие `llms-full.txt` рядом определяется само.
+
+    Args:
+        domain: Имя источника, как его потом называть (`docs.example.com/v2`).
+        covers: Что покрывает документация, одной фразой.
+        index: Адрес `llms.txt`, если он не `https://<domain>/llms.txt`.
+    """
+    return await add_source(domain, covers, index, get_settings())
+
+
+@router.tool(
+    title="Удалить источник llms.txt",
+    tags={"llms"},
+    annotations=ToolAnnotations(
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=False,
+        open_world_hint=False,
+    ),
+)
+async def llms_remove_source(domain: NonEmptyStr) -> KnownSource:
+    """Удалить добавленный источник из реестра; встроенные удалить нельзя.
+
+    Args:
+        domain: Имя источника из llms_sources.
+    """
+    return remove_source(domain, get_settings())
 
 
 @router.tool(title="Индекс llms.txt", tags={"llms"}, annotations=_READING)
@@ -67,7 +129,7 @@ async def llms_search(
     Args:
         query: Слова через пробел.
         source: Домен или адрес индекса, как у llms_index; без него — по
-            оглавлениям всех источников из llms_sources.
+            оглавлениям всех живых источников из llms_sources.
         scope: index — по названиям и описаниям ссылок; full — по разделам
             `llms-full.txt` одного источника, когда темы в оглавлении не видно.
     """

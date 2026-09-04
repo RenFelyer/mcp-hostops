@@ -21,6 +21,7 @@ EXPECTED = {
     "job",
     "kill",
     "jobs",
+    "llms_sources",
     "llms_index",
     "llms_search",
     "llms_fetch",

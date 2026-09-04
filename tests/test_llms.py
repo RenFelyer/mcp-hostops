@@ -1,4 +1,4 @@
-"""Роутер llms.txt: разбор индекса, поиск, кэш и проверка домена — без сети."""
+"""Роутер llms.txt: реестр, разбор индекса, поиск, кэш и проверка домена — без сети."""
 
 import json
 from collections.abc import Iterator
@@ -10,7 +10,8 @@ import pytest
 
 from mcp_openssh_connector.core.config import Settings, get_settings
 from mcp_openssh_connector.core.errors import UserError
-from mcp_openssh_connector.routers.llms import services
+from mcp_openssh_connector.routers.llms import services, sources
+from mcp_openssh_connector.routers.llms.schemas import KnownSource
 
 INDEX = """# Ruff
 
@@ -45,11 +46,28 @@ FULL = """# Ruff
 Стиль как у black.
 """
 
+RUFF = KnownSource(domain="docs.astral.sh/ruff", index="https://docs.astral.sh/ruff/llms.txt", covers="ruff")
+DEAD = KnownSource(domain="dead.example", index="https://dead.example/llms.txt", covers="-")
 
-def test_index_url_forms() -> None:
+
+def test_index_url_forms_and_registry() -> None:
     assert services.index_url("docs.astral.sh/uv") == "https://docs.astral.sh/uv/llms.txt"
     assert services.index_url("https://x.dev/") == "https://x.dev/llms.txt"
     assert services.index_url("https://x.dev/v2/llms.txt") == "https://x.dev/v2/llms.txt"
+    assert services.domain_of("https://docs.astral.sh/uv/llms.txt") == "docs.astral.sh/uv"
+    assert services.domain_of("https://x.dev/llms.txt") == "x.dev"
+
+
+def test_registry_consistent() -> None:
+    known = sources.KNOWN
+    assert len({k.domain for k in known}) == len(known)
+    for k in known:
+        assert k.index.startswith("https://")
+        assert k.index.endswith("llms.txt")
+        assert k.covers
+        assert (k.full == "") == (k.full_size == "")  # размер только вместе с адресом
+    assert "llms.txt" in sources.VARIANTS
+    assert "llms-full.txt" in sources.VARIANTS
 
 
 def test_parse_index_sections_and_relative_urls() -> None:
@@ -75,7 +93,8 @@ def _serve(pages: dict[str, str], *, spa: bool = False) -> httpx2.MockTransport:
     def handler(request: httpx2.Request) -> httpx2.Response:
         path = request.url.path
         if path in pages:
-            return httpx2.Response(200, text=pages[path], headers={"content-type": "text/markdown"})
+            body = "" if request.method == "HEAD" else pages[path]
+            return httpx2.Response(200, text=body, headers={"content-type": "text/markdown"})
         if spa:
             return httpx2.Response(200, text="<html>app</html>", headers={"content-type": "text/html"})
         return httpx2.Response(404, text="nope")
@@ -103,18 +122,22 @@ def test_index_search_fetch_end_to_end(cache: Path, monkeypatch: pytest.MonkeyPa
     pages = {
         "/ruff/llms.txt": INDEX,
         "/ruff/llms-full.txt": FULL,
+        "/ruff/llms-small.txt": "small",
         "/ruff/configuration.md": "x" * 30,
     }
     _use(_serve(pages), monkeypatch)
 
     async def scenario() -> None:
-        index = await services.load_index("docs.astral.sh/ruff")
+        index = await services.load_index("docs.astral.sh/ruff", get_settings())
         assert len(index.entries) == 3
+        assert index.variants == ["llms.txt", "llms-full.txt", "llms-small.txt"]
 
-        by_index = await services.search("docs.astral.sh/ruff", "PYPROJECT", "index")
+        by_index = await services.search("PYPROJECT", "docs.astral.sh/ruff", "index")
         assert [h.title for h in by_index.hits] == ["Настройка"]
+        assert by_index.hits[0].domain == "docs.astral.sh/ruff"
+        assert by_index.searched == ["docs.astral.sh/ruff"]
 
-        by_full = await services.search("docs.astral.sh/ruff", "коды", "full")
+        by_full = await services.search("коды", "docs.astral.sh/ruff", "full")
         assert [h.title for h in by_full.hits] == ["Линтер"]
         assert by_full.hits[0].url.endswith("/ruff/llms-full.txt")
 
@@ -128,23 +151,38 @@ def test_index_search_fetch_end_to_end(cache: Path, monkeypatch: pytest.MonkeyPa
         assert tail.next_offset is None
 
     anyio.run(scenario)
-    # Всё скачанное лежит в кэше: индекс, full, страница и мусорная проба.
+    # В кэше индекс, full, страница, мусорная проба и HEAD по каждому варианту.
     bodies = list((cache / "mcp-openssh-connector" / "llms").rglob("*.body"))
-    assert len(bodies) == 4
+    assert len(bodies) == 4 + len(sources.VARIANTS)
+
+
+@pytest.mark.usefixtures("cache")
+def test_search_all_known_skips_broken(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(services, "KNOWN", (RUFF, DEAD))
+    transport = _serve({"/ruff/llms.txt": INDEX})
+    _use(transport, monkeypatch)
+
+    result = anyio.run(services.search, "длинные", None, "index")
+    assert result.searched == ["docs.astral.sh/ruff"]
+    assert result.skipped == ["dead.example: https://dead.example/llms.txt: HTTP 404"]
+    assert [h.title for h in result.hits] == ["E501"]
+
+    with pytest.raises(UserError, match="full"):
+        anyio.run(services.search, "x", None, "full")
 
 
 @pytest.mark.usefixtures("cache")
 def test_spa_domain_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     _use(_serve({"/llms.txt": INDEX}, spa=True), monkeypatch)
     with pytest.raises(UserError, match="SPA"):
-        anyio.run(services.load_index, "spa.example")
+        anyio.run(services.load_index, "spa.example", get_settings())
 
 
 @pytest.mark.usefixtures("cache")
 def test_missing_index_is_user_error(monkeypatch: pytest.MonkeyPatch) -> None:
     _use(_serve({}), monkeypatch)
     with pytest.raises(UserError, match="HTTP 404"):
-        anyio.run(services.load_index, "honest.example")
+        anyio.run(services.load_index, "honest.example", get_settings())
 
 
 def test_cache_respects_ttl(cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:

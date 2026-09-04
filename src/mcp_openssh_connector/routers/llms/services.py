@@ -17,12 +17,22 @@ from itertools import pairwise
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
+import anyio
 import httpx2
 from pydantic import BaseModel
 
 from ...core.config import Settings, get_settings
 from ...core.errors import UserError
-from .schemas import IndexEntry, LlmsIndex, Page, SearchHit, SearchResult, SearchScope
+from .schemas import (
+    IndexEntry,
+    LlmsIndex,
+    Page,
+    SearchHit,
+    SearchResult,
+    SearchScope,
+    SourcesResult,
+)
+from .sources import ABSENT, KNOWN, VARIANTS
 
 _HTTP_ERROR = 400  # с этого кода ответ — ошибка
 _INDEX_NAME = "llms.txt"
@@ -32,7 +42,7 @@ _HEADING = re.compile(r"^#{1,3} ", re.MULTILINE)
 
 
 class Fetched(BaseModel):
-    """Скачанный ресурс: тело и тип содержимого."""
+    """Скачанный ресурс: код, тип содержимого и тело (у HEAD — пустое)."""
 
     status: int
     content_type: str
@@ -53,23 +63,43 @@ def make_client(s: Settings) -> httpx2.AsyncClient:
     )
 
 
+def sources() -> SourcesResult:
+    """Реестр известных источников и имена вариантов файлов."""
+    return SourcesResult(known=list(KNOWN), absent=list(ABSENT), variants=list(VARIANTS))
+
+
 def index_url(source: str) -> str:
-    """Адрес индекса из того, что назвал клиент: домен, домен с путём или URL."""
+    """Адрес индекса: из реестра по домену, иначе из того, что назвал клиент.
+
+    Клиент может назвать домен (`docs.astral.sh/uv`), домен с путём или адрес
+    файла целиком.
+    """
+    for known in KNOWN:
+        if source in (known.domain, known.index):
+            return known.index
     url = source if "://" in source else f"https://{source}"
     if not url.endswith(".txt"):
         url = url.rstrip("/") + "/" + _INDEX_NAME
     return url
 
 
-def _cache_paths(url: str, s: Settings) -> tuple[Path, Path]:
+def domain_of(url: str) -> str:
+    """Имя источника для ответов: домен из реестра или хост адреса."""
+    for known in KNOWN:
+        if url == known.index:
+            return known.domain
+    return urlsplit(url).hostname or url
+
+
+def _cache_paths(method: str, url: str, s: Settings) -> tuple[Path, Path]:
     host = urlsplit(url).hostname or "unknown"
-    key = hashlib.sha256(url.encode()).hexdigest()[:24]
+    key = hashlib.sha256(f"{method} {url}".encode()).hexdigest()[:24]
     base = s.llms_cache_dir / host / key
     return base.with_suffix(".body"), base.with_suffix(".meta")
 
 
-def _cached(url: str, s: Settings) -> Fetched | None:
-    body_path, meta_path = _cache_paths(url, s)
+def _cached(method: str, url: str, s: Settings) -> Fetched | None:
+    body_path, meta_path = _cache_paths(method, url, s)
     try:
         if time.time() - meta_path.stat().st_mtime > s.llms_cache_ttl:
             return None
@@ -79,8 +109,8 @@ def _cached(url: str, s: Settings) -> Fetched | None:
         return None
 
 
-def _store(url: str, fetched: Fetched, s: Settings) -> None:
-    body_path, meta_path = _cache_paths(url, s)
+def _store(method: str, url: str, fetched: Fetched, s: Settings) -> None:
+    body_path, meta_path = _cache_paths(method, url, s)
     try:
         body_path.parent.mkdir(parents=True, exist_ok=True)
         body_path.write_bytes(fetched.body)
@@ -89,20 +119,20 @@ def _store(url: str, fetched: Fetched, s: Settings) -> None:
         pass
 
 
-async def fetch(url: str, s: Settings) -> Fetched:
+async def fetch(url: str, s: Settings, method: str = "GET") -> Fetched:
     """Скачать ресурс с кэшем и потолком размера.
 
     Код ответа возвращается, а не превращается в ошибку: проверке домена нужен
-    и 404. Ошибка сети или превышение потолка — `UserError`.
+    и 404. HEAD тела не тянет — им проверяется наличие вариантов файлов.
 
     Raises:
         UserError: сеть недоступна, таймаут или тело больше `llms_max_bytes`.
     """
-    if (hit := _cached(url, s)) is not None:
+    if (hit := _cached(method, url, s)) is not None:
         return hit
     body = bytearray()
     try:
-        async with make_client(s) as client, client.stream("GET", url) as response:
+        async with make_client(s) as client, client.stream(method, url) as response:
             async for chunk in response.aiter_bytes():
                 body += chunk
                 if len(body) > s.llms_max_bytes:
@@ -114,7 +144,7 @@ async def fetch(url: str, s: Settings) -> Fetched:
             )
     except httpx2.HTTPError as err:
         raise UserError(f"не удалось скачать {url}: {err}") from err
-    _store(url, fetched, s)
+    _store(method, url, fetched, s)
     return fetched
 
 
@@ -149,11 +179,31 @@ async def fetch_ok(url: str, s: Settings) -> Fetched:
     return fetched
 
 
+async def present_variants(index: str, s: Settings) -> list[str]:
+    """Какие из `VARIANTS` лежат рядом с индексом (по HEAD, параллельно).
+
+    Домен уже проверен вызывающим: на SPA-заглушке HEAD ответил бы 200 на всё.
+    """
+    found: dict[str, bool] = {}
+
+    async def probe(name: str) -> None:
+        try:
+            found[name] = (await fetch(urljoin(index, name), s, "HEAD")).status < _HTTP_ERROR
+        except UserError:
+            found[name] = False
+
+    async with anyio.create_task_group() as tg:
+        for name in VARIANTS:
+            tg.start_soon(probe, name)
+    return [name for name in VARIANTS if found.get(name)]
+
+
 def parse_index(text: str, base_url: str) -> LlmsIndex:
     """Разобрать `llms.txt`: заголовок, аннотация, ссылки по разделам.
 
     Формат: `# Заголовок`, `> аннотация`, `## Раздел`, строки `- [имя](url):
-    описание`. Относительные адреса раскрываются от `base_url`.
+    описание`. Относительные адреса раскрываются от `base_url`. Варианты
+    файлов здесь не проверяются — это сеть, см. `present_variants`.
     """
     title = summary = section = full_url = ""
     entries: list[IndexEntry] = []
@@ -177,14 +227,22 @@ def parse_index(text: str, base_url: str) -> LlmsIndex:
                     section=section,
                 )
             )
-    return LlmsIndex(url=base_url, title=title, summary=summary, entries=entries, full_url=full_url)
+    return LlmsIndex(
+        url=base_url,
+        title=title,
+        summary=summary,
+        entries=entries,
+        full_url=full_url,
+        variants=[],
+    )
 
 
-async def load_index(source: str) -> LlmsIndex:
-    """Индекс домена: проверка домена, скачивание, разбор."""
-    s = get_settings()
+async def load_index(source: str, s: Settings) -> LlmsIndex:
+    """Индекс источника: проверка домена, скачивание, разбор, варианты рядом."""
     url = index_url(source)
-    return parse_index((await fetch_ok(url, s)).text, url)
+    index = parse_index((await fetch_ok(url, s)).text, url)
+    index.variants = await present_variants(url, s)
+    return index
 
 
 def _matches(text: str, words: list[str]) -> bool:
@@ -211,44 +269,79 @@ def sections(text: str) -> list[tuple[str, str]]:
     return result
 
 
-async def search(source: str, query: str, scope: SearchScope) -> SearchResult:
-    """Найти слова запроса (все, без учёта регистра) в индексе или в full-файле.
+def _index_hits(index: LlmsIndex, words: list[str]) -> list[SearchHit]:
+    domain = domain_of(index.url)
+    return [
+        SearchHit(
+            domain=domain,
+            scope="index",
+            title=entry.title,
+            url=entry.url,
+            text=entry.description,
+            truncated=False,
+        )
+        for entry in index.entries
+        if _matches(f"{entry.title} {entry.description} {entry.url}", words)
+    ]
+
+
+async def _full_hits(index: LlmsIndex, words: list[str], s: Settings) -> list[SearchHit]:
+    full_url = index.full_url or urljoin(index.url, _FULL_NAME)
+    text = (await fetch_ok(full_url, s)).text
+    return [
+        SearchHit(
+            domain=domain_of(index.url),
+            scope="full",
+            title=heading,
+            url=full_url,
+            text=chunk[: s.llms_hit_chars],
+            truncated=len(chunk) > s.llms_hit_chars,
+        )
+        for heading, chunk in sections(text)
+        if _matches(chunk, words)
+    ]
+
+
+async def search(query: str, source: str | None, scope: SearchScope) -> SearchResult:
+    """Найти слова запроса (все, без учёта регистра).
+
+    Без `source` — по оглавлениям всех источников реестра; недоступный источник
+    пропускается и называется в `skipped`, остальные всё равно ищутся.
 
     Raises:
-        UserError: пустой запрос, домен нечестный или файла нет.
+        UserError: пустой запрос, `full` без источника, либо названный источник
+            нечестный или без файла.
     """
     s = get_settings()
     words = query.lower().split()
     if not words:
         raise UserError("пустой запрос")
-    index = await load_index(source)
-    if scope == "index":
-        hits = [
-            SearchHit(
-                source=scope,
-                title=entry.title,
-                url=entry.url,
-                text=entry.description,
-                truncated=False,
-            )
-            for entry in index.entries
-            if _matches(f"{entry.title} {entry.description} {entry.url}", words)
-        ]
-    else:
-        full_url = index.full_url or urljoin(index.url, _FULL_NAME)
-        text = (await fetch_ok(full_url, s)).text
-        hits = [
-            SearchHit(
-                source=scope,
-                title=heading,
-                url=full_url,
-                text=chunk[: s.llms_hit_chars],
-                truncated=len(chunk) > s.llms_hit_chars,
-            )
-            for heading, chunk in sections(text)
-            if _matches(chunk, words)
-        ]
-    return SearchResult(query=query, scope=scope, total=len(hits), hits=hits[: s.llms_max_hits])
+    if source is None and scope == "full":
+        raise UserError("поиск по full — только с указанным источником")
+    targets = [source] if source is not None else [k.domain for k in KNOWN]
+
+    hits: list[SearchHit] = []
+    searched: list[str] = []
+    skipped: list[str] = []
+    for target in targets:
+        try:
+            index = await load_index(target, s)
+            found = _index_hits(index, words) if scope == "index" else await _full_hits(index, words, s)
+        except UserError as err:
+            if source is not None:
+                raise
+            skipped.append(f"{target}: {err}")
+            continue
+        searched.append(target)
+        hits += found
+    return SearchResult(
+        query=query,
+        scope=scope,
+        searched=searched,
+        skipped=skipped,
+        total=len(hits),
+        hits=hits[: s.llms_max_hits],
+    )
 
 
 async def fetch_page(url: str, offset: int) -> Page:

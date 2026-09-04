@@ -56,3 +56,11 @@ def test_write_bytes_atomic(tmp_path: Path) -> None:
     store.write_bytes(path, b"\x00\xff")
     assert path.read_bytes() == b"\x00\xff"
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_stamped_extra_fields_are_content(tmp_path: Path) -> None:
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps({"checked_at": "123", "hosts": {"a": "x"}, "n": [1, None]}))
+    age, data = store.load_stamped(path)
+    assert age > 0  # число строкой pydantic принимает
+    assert data == {"hosts": {"a": "x"}, "n": [1, None]}

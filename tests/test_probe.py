@@ -47,3 +47,16 @@ def test_probe_via_chained_jump_skips_tcp(monkeypatch: pytest.MonkeyPatch, tmp_p
     inner = _host("10.0.0.5", alias="inner", proxyjump="mid")
     mid = _host("10.0.0.1", alias="mid", proxyjump="edge")
     assert probe._probe_via(mid, [inner], Settings()) == {"inner": "available"}
+
+
+def test_probe_via_garbage_output_is_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Вывод скрипта не в словаре статусов — не гадать, а сказать «неизвестно».
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(probe, "_reachable", lambda _host, _timeout: True)
+
+    def fake_ssh(_argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, stdout="motd banner\ninner maybe\n", stderr="")
+
+    monkeypatch.setattr(probe, "run_sync", fake_ssh)
+    jump = _host("10.0.0.1", alias="jump", proxyjump="")
+    assert probe._probe_via(jump, [_host("10.0.0.5", alias="inner")], Settings()) == {"inner": "unknown"}

@@ -214,7 +214,8 @@ Host из конфига» в OpenSSH нет. Поэтому список чит
   `READS_REMOTE`/`READS_LOCAL`/`RUNS_REMOTE` для инструментов с одинаковой
   семантикой; уникальный набор подсказок инструмент описывает у себя с
   причиной. Вокабуляры — `Literal`, без констант-дублей: опечатку в литерале
-  ловит mypy. Локальное — в схемах роутера (например `JobStatus` в
+  ловит mypy, а значение с диска или из вывода скрипта сужает до `Literal`
+  pydantic (`TypeAdapter`) у читающего, без ручных функций-приводилок. Локальное — в схемах роутера (например `JobStatus` в
   `routers/jobs/schemas.py`). Схемы наследуют, а не копируют поля:
   `HostStatus(Host)`, `JobSnapshot(JobRef, CapturedOutput)`,
   `SourcesResult(Checked)`.

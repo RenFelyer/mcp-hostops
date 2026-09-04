@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 # Строковый параметр инструмента, для которого пустая строка — ошибка вызова.
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 
-# Значение из JSON-файла состояния: то, что даёт `json.loads`. Содержимое
-# сужается pydantic-моделью или `isinstance` у того, кто его читает.
+# Значение из JSON-файла состояния. До конкретного типа его сужает pydantic
+# (`TypeAdapter`, модель) у того, кто читает; ручных `isinstance` нет.
 type Json = Mapping[str, Json] | Sequence[Json] | str | int | float | bool | None
 
 # Доступность хоста: значение статуса в ответах роутера hosts и в пробах.
@@ -72,12 +72,3 @@ class KnownSource(BaseModel):
     full: str = Field(default="", description="адрес `llms-full.txt`, если известен")
     full_size: int | None = Field(default=None, description="размер full-файла в байтах, чтобы не читать целиком")
     default: bool = Field(default=False, description="встроенный; удалить нельзя")
-
-
-def as_availability(value: Json) -> Availability:
-    """Привести значение из кэша или вывода пробы к статусу; чужое — «unknown»."""
-    if value == "available":
-        return "available"
-    if value == "unavailable":
-        return "unavailable"
-    return "unknown"

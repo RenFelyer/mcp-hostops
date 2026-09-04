@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 import anyio.to_thread
+from pydantic import ValidationError
 
 from ..config.constants import SSH_CONFIG, SSH_DIR
 from ..config.environment import get_settings
@@ -103,22 +104,17 @@ def resolve(alias: str, timeout: float) -> Host | None:
     перед алиасом не даёт имени, начинающемуся с `-`, стать опцией ssh.
 
     Returns:
-        Хост или None, если ssh не ответил, упал или не уложился в `timeout`.
+        Хост или None, если ssh не ответил, упал, не уложился в `timeout` или
+        напечатал не то, из чего собирается `Host`.
     """
     try:
         done = run_sync(["ssh", "-G", "--", alias], timeout)
-        # `ssh -G` печатает без отступов и всегда в нижнем регистре.
+        # `ssh -G` печатает без отступов и всегда в нижнем регистре; лишние
+        # ключи модель отбрасывает, недостающий или кривой port — ошибка.
         fields = pairs(done.stdout) if done.returncode == 0 else {}
-        port = int(fields["port"])
-    except (OSError, subprocess.SubprocessError, KeyError, ValueError):
+        return Host.model_validate({"alias": alias, "proxyjump": "", **fields})
+    except (OSError, subprocess.SubprocessError, ValidationError):
         return None
-    return Host(
-        alias=alias,
-        hostname=fields.get("hostname", alias),
-        user=fields.get("user", "-"),
-        port=port,
-        proxyjump=fields.get("proxyjump", ""),
-    )
 
 
 def _resolve_all(aliases: list[str], timeout: float) -> dict[str, Host]:

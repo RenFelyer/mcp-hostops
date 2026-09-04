@@ -29,11 +29,10 @@
 import contextlib
 import hashlib
 import ipaddress
-import json
 import logging
 import re
 import socket
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from http import HTTPStatus
 from itertools import pairwise
 from pathlib import Path
@@ -80,6 +79,7 @@ _LINK = re.compile(r"\[(?P<title>[^\]]*)\]\((?P<url>[^)\s]+)\)\s*:?\s*(?P<desc>.
 _HEADING = re.compile(r"#{1,3} ")
 _HOSTNAME = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")
 _VERDICTS = TypeAdapter(dict[str, SourceVerdict])  # содержимое файла итогов по доменам
+_SOURCES = TypeAdapter(list[KnownSource])  # содержимое файла пользовательских источников
 
 
 class Fetched(BaseModel):
@@ -178,14 +178,11 @@ def custom_sources(s: Settings) -> list[KnownSource]:
     """Пользовательские источники из файла; битый или отсутствующий файл — пусто."""
     data = store.load(s.llms_sources_file) or {}
     builtin = {known.domain for known in LLMS_DEFAULT_SOURCES}
-    sources = data.get("sources")
-    if not isinstance(sources, Sequence):
-        return []
     try:
-        items = [KnownSource.model_validate(item).model_copy(update={"default": False}) for item in sources]
+        items = _SOURCES.validate_python(data.get("sources", []))
     except ValidationError:
         return []
-    return [item for item in items if item.domain not in builtin]
+    return [item.model_copy(update={"default": False}) for item in items if item.domain not in builtin]
 
 
 def _save_sources(items: list[KnownSource], s: Settings) -> None:
@@ -259,9 +256,8 @@ def _cached(method: str, url: str, s: Settings) -> Fetched | None:
     try:
         if time() - meta_path.stat().st_mtime > s.llms_cache_ttl:
             return None
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        return Fetched(**meta, body=body_path.read_bytes())
-    except (OSError, ValueError, TypeError):
+        return Fetched.model_validate({**(store.load(meta_path) or {}), "body": body_path.read_bytes()})
+    except (OSError, ValidationError):
         return None
 
 

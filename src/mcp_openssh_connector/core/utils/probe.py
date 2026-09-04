@@ -18,9 +18,11 @@ from collections.abc import Callable
 from functools import partial
 from time import sleep, time
 
+from pydantic import TypeAdapter, ValidationError
+
 from ..config.constants import PROBE_PATH_BUDGET, PROBE_PATH_PAUSE, PROBE_RETRY_ERRNOS
 from ..config.environment import Settings
-from ..schemas import Availability, Host, as_availability
+from ..schemas import Availability, Host
 from .hosts import pairs, resolve
 from .parallel import fan_out
 from .ssh import run_sync, ssh_argv
@@ -28,6 +30,7 @@ from .ssh import run_sync, ssh_argv
 log = logging.getLogger(__name__)
 
 Statuses = dict[str, Availability]
+_REPORT = TypeAdapter(Statuses)  # вывод jump-скрипта: «алиас статус» по строке
 
 
 def _reachable(host: Host, connect_timeout: float) -> bool:
@@ -91,7 +94,12 @@ def _probe_via(jump: Host, group: list[Host], s: Settings) -> Statuses:
     if done.returncode != 0:
         return down
     seen = pairs(done.stdout)
-    return {h.alias: as_availability(seen.get(h.alias)) for h in group}
+    try:
+        return _REPORT.validate_python({h.alias: seen.get(h.alias) for h in group})
+    except ValidationError:
+        # Скрипт наш и печатает строку на каждый алиас; иного не бывает, но
+        # догадываться о статусе по мусору нельзя.
+        return dict.fromkeys((h.alias for h in group), "unknown")
 
 
 def measure(hosts: list[Host], s: Settings) -> Statuses:

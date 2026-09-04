@@ -14,17 +14,28 @@ from collections.abc import Mapping
 from pathlib import Path
 from time import time
 
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
 from .config.constants import PRIVATE_DIR_MODE
 from .schemas import Json
+
+_OBJECT = TypeAdapter(dict[str, Json])
+
+
+class _Stamped(BaseModel):
+    """Запись с отметкой времени; остальные поля — содержимое."""
+
+    model_config = ConfigDict(extra="allow")
+
+    checked_at: float
 
 
 def load(path: Path) -> dict[str, Json] | None:
     """Прочитать JSON-объект; None — файла нет, он битый или это не объект."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return _OBJECT.validate_json(path.read_bytes())
+    except (OSError, ValidationError):
         return None
-    return data if isinstance(data, dict) else None
 
 
 def write_bytes(path: Path, data: bytes) -> None:
@@ -60,11 +71,11 @@ def load_stamped(path: Path) -> tuple[float, dict[str, Json]]:
         Возраст записи в секундах и её содержимое без отметки. Возраст `inf` и
         пустое содержимое — файла нет, он битый или отметка не число.
     """
-    data = load(path) or {}
-    checked_at = data.pop("checked_at", None)
-    if not isinstance(checked_at, int | float):
+    try:
+        stamped = _Stamped.model_validate(load(path))
+    except ValidationError:
         return float("inf"), {}
-    return time() - checked_at, data
+    return time() - stamped.checked_at, stamped.model_extra or {}
 
 
 def save_stamped(path: Path, data: Mapping[str, Json]) -> None:

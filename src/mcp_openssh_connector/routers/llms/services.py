@@ -5,8 +5,10 @@
 `llms-full.txt` бывает десятки мегабайт и целиком в ответ не идёт никогда —
 только совпадения по разделам.
 
-Домен проверяется мусорным URL рядом с индексом: часть сайтов на любой путь
-отдаёт 200 с HTML-оболочкой, и тогда «индекс» — тоже мусор, сколько бы ни весил.
+Часть сайтов на любой путь отдаёт 200 с HTML-оболочкой, при этом настоящие
+файлы у них приходят как text/plain. Поэтому заглушкой считается только ресурс,
+который сам выглядит HTML, когда домен ещё и отвечает 200 на мусорный путь
+рядом с ним; текстовый ответ — документ, что бы домен ни отдавал на мусор.
 """
 
 import hashlib
@@ -35,6 +37,7 @@ from .schemas import (
 from .sources import ABSENT, KNOWN, VARIANTS
 
 _HTTP_ERROR = 400  # с этого кода ответ — ошибка
+_JUNK_NAME = "zzz-nope-12345.txt"  # стабильное имя, чтобы проба кэшировалась
 _INDEX_NAME = "llms.txt"
 _FULL_NAME = "llms-full.txt"
 _LINK = re.compile(r"\[(?P<title>[^\]]*)\]\((?P<url>[^)\s]+)\)\s*:?\s*(?P<desc>.*)")
@@ -148,47 +151,45 @@ async def fetch(url: str, s: Settings, method: str = "GET") -> Fetched:
     return fetched
 
 
-async def require_honest(url: str, s: Settings) -> None:
-    """Убедиться, что домен не отдаёт 200 на любой путь.
-
-    Мусорный адрес берётся в каталоге самого `url`; имя стабильно, чтобы ответ
-    кэшировался вместе с остальным.
-
-    Raises:
-        UserError: SPA-заглушка — на мусорный путь пришёл успешный ответ.
-    """
-    junk = urljoin(url, "zzz-nope-12345.txt")
-    probe = await fetch(junk, s)
-    if probe.status < _HTTP_ERROR:
-        raise UserError(
-            f"{urlsplit(url).hostname}: отдаёт {probe.status} на любой путь — это "
-            "SPA-заглушка, llms.txt на нём верить нельзя"
-        )
+def _looks_html(fetched: Fetched) -> bool:
+    head = fetched.body.lstrip()[:15].lower()
+    return fetched.content_type.lower().startswith("text/html") or head.startswith((b"<!doctype", b"<html"))
 
 
 async def fetch_ok(url: str, s: Settings) -> Fetched:
-    """Скачать с проверкой домена; неуспешный код ответа — ошибка вызова.
+    """Скачать документ; неуспешный код или SPA-заглушка — ошибка вызова.
+
+    HTML в ответе сам по себе не приговор: честный домен может отдать HTML
+    страницу. Приговор — HTML плюс успешный ответ на мусорный путь рядом.
 
     Raises:
-        UserError: SPA-заглушка, ошибка сети или код ответа не 2xx/3xx.
+        UserError: ошибка сети, код ответа не 2xx/3xx или SPA-заглушка.
     """
-    await require_honest(url, s)
     fetched = await fetch(url, s)
     if fetched.status >= _HTTP_ERROR:
         raise UserError(f"{url}: HTTP {fetched.status}")
+    if _looks_html(fetched):
+        probe = await fetch(urljoin(url, _JUNK_NAME), s)
+        if probe.status < _HTTP_ERROR:
+            raise UserError(
+                f"{url}: пришла HTML-оболочка, а домен отвечает {probe.status} на "
+                "любой путь — это SPA-заглушка, не документ"
+            )
     return fetched
 
 
 async def present_variants(index: str, s: Settings) -> list[str]:
     """Какие из `VARIANTS` лежат рядом с индексом (по HEAD, параллельно).
 
-    Домен уже проверен вызывающим: на SPA-заглушке HEAD ответил бы 200 на всё.
+    Домен, отвечающий 200 на всё, отдаёт на отсутствующий файл HTML-оболочку,
+    поэтому «есть» — это успешный код и не HTML в типе содержимого.
     """
     found: dict[str, bool] = {}
 
     async def probe(name: str) -> None:
         try:
-            found[name] = (await fetch(urljoin(index, name), s, "HEAD")).status < _HTTP_ERROR
+            head = await fetch(urljoin(index, name), s, "HEAD")
+            found[name] = head.status < _HTTP_ERROR and not _looks_html(head)
         except UserError:
             found[name] = False
 

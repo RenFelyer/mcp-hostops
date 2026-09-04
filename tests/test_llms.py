@@ -151,9 +151,10 @@ def test_index_search_fetch_end_to_end(cache: Path, monkeypatch: pytest.MonkeyPa
         assert tail.next_offset is None
 
     anyio.run(scenario)
-    # В кэше индекс, full, страница, мусорная проба и HEAD по каждому варианту.
+    # В кэше индекс, full, страница и HEAD по каждому варианту; мусорной пробы
+    # нет — текстовые ответы в ней не нуждаются.
     bodies = list((cache / "mcp-openssh-connector" / "llms").rglob("*.body"))
-    assert len(bodies) == 4 + len(sources.VARIANTS)
+    assert len(bodies) == 3 + len(sources.VARIANTS)
 
 
 @pytest.mark.usefixtures("cache")
@@ -173,9 +174,19 @@ def test_search_all_known_skips_broken(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.usefixtures("cache")
 def test_spa_domain_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    _use(_serve({"/llms.txt": INDEX}, spa=True), monkeypatch)
+    # Индекса нет: вместо него HTML-оболочка, и на мусор тоже 200.
+    _use(_serve({}, spa=True), monkeypatch)
     with pytest.raises(UserError, match="SPA"):
         anyio.run(services.load_index, "spa.example", get_settings())
+
+
+@pytest.mark.usefixtures("cache")
+def test_text_index_trusted_on_spa_like_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Как docs.claude.com: настоящие файлы — text, на всё остальное — HTML 200.
+    _use(_serve({"/llms.txt": INDEX, "/llms-full.txt": FULL}, spa=True), monkeypatch)
+    index = anyio.run(services.load_index, "spa.example", get_settings())
+    assert len(index.entries) == 3
+    assert index.variants == ["llms.txt", "llms-full.txt"]
 
 
 @pytest.mark.usefixtures("cache")

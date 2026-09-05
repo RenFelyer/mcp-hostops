@@ -29,6 +29,7 @@ packages = ["src/mcp_hostops"]
 dev = [
     "mypy>=2.3.1",
     "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
     "ruff>=0.16.6",
 ]
 
@@ -99,4 +100,11 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["mcp_hostops"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85  # текущее ~87%; порог чуть ниже, поднимать храповиком по мере тестов

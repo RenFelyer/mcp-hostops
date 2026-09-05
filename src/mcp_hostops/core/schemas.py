@@ -79,3 +79,23 @@ class Link(BaseModel):
     url: str
     description: str = ""
     section: str = ""
+
+
+class Invocation(BaseModel):
+    """A ready-to-run ssh invocation: argv, the stdin payload, and the password for masking.
+
+    stdin and the password are hidden from `repr`: an exception's text or a
+    debug log entry with the invocation must not reveal the sudo password.
+    """
+
+    argv: list[str]
+    stdin: bytes = Field(repr=False)
+    password: str | None = Field(repr=False)
+
+
+class Stamped(BaseModel):
+    """A stored record with a timestamp; the remaining fields are the content."""
+
+    model_config = ConfigDict(extra="allow")
+
+    checked_at: float

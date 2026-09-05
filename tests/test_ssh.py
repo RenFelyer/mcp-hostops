@@ -5,9 +5,8 @@ from pathlib import Path
 import pytest
 
 from mcp_hostops.core.config.environment import Settings
-from mcp_hostops.core.schemas import Host
+from mcp_hostops.core.schemas import Host, Invocation
 from mcp_hostops.core.utils.ssh import (
-    Invocation,
     Output,
     build_stdin,
     control_args,

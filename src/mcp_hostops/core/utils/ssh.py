@@ -16,11 +16,10 @@ from collections.abc import AsyncGenerator
 
 import anyio
 import anyio.abc
-from pydantic import BaseModel, Field
 
 from ..config.constants import SUDO_PRIME
 from ..config.environment import Settings
-from ..schemas import CapturedOutput, Host, SudoMode
+from ..schemas import CapturedOutput, Host, Invocation, SudoMode
 from ..store import private_dir
 from .sudo import decide_prime, mask, read_secret
 
@@ -101,18 +100,6 @@ def build_stdin(password: str | None, user_stdin: str | None) -> bytes:
     if user_stdin:
         payload += user_stdin.encode()
     return payload
-
-
-class Invocation(BaseModel):
-    """A ready-to-run invocation: argv, the stdin payload, and the password for masking.
-
-    stdin and the password are hidden from `repr`: an exception's text or a
-    debug log entry with the invocation must not reveal the sudo password.
-    """
-
-    argv: list[str]
-    stdin: bytes = Field(repr=False)
-    password: str | None = Field(repr=False)
 
 
 def prepare(

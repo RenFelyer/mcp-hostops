@@ -18,9 +18,9 @@ import anyio
 
 from ...core.config.environment import Settings, get_settings
 from ...core.errors import UserError
-from ...core.schemas import SudoMode
+from ...core.schemas import Invocation, SudoMode
 from ...core.utils.hosts import require_host
-from ...core.utils.ssh import Capture, Invocation, execute, prepare, spawn
+from ...core.utils.ssh import Capture, execute, prepare, spawn
 from .schemas import JobRef, JobSnapshot
 
 

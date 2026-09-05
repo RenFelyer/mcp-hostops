@@ -1,5 +1,6 @@
-"""Response schemas for the llms.txt router."""
+"""Response schemas for the llms.txt router, plus the internal download DTO."""
 
+from http import HTTPStatus
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -11,6 +12,36 @@ SearchScope = Literal["index", "full"]
 
 # Outcome of a source check: the index responds with text; doesn't respond; HTML stub.
 SourceState = Literal["ok", "unavailable", "stub"]
+
+
+class Fetched(BaseModel):
+    """A downloaded resource: status, content type and length, body (empty for HEAD)."""
+
+    status: int
+    content_type: str
+    content_length: int | None
+    body: bytes
+
+    @property
+    def ok(self) -> bool:
+        """Response status is not an error (below 400)."""
+        return self.status < HTTPStatus.BAD_REQUEST
+
+    @property
+    def cacheable(self) -> bool:
+        """Response is worth remembering: successes and stable failures, but not server errors or 429."""
+        return self.status < HTTPStatus.INTERNAL_SERVER_ERROR and self.status != HTTPStatus.TOO_MANY_REQUESTS
+
+    @property
+    def text(self) -> str:
+        """Body as text; bytes outside UTF-8 are replaced rather than failing the call."""
+        return self.body.decode("utf-8", "replace")
+
+    @property
+    def is_html(self) -> bool:
+        """Looks like HTML by content type or by the start of the body."""
+        head = self.body.lstrip()[:15].lower()
+        return self.content_type.lower().startswith("text/html") or head.startswith((b"<!doctype", b"<html"))
 
 
 class SourceVerdict(BaseModel):

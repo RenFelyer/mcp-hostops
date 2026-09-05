@@ -35,7 +35,6 @@ import logging
 import re
 import socket
 from collections.abc import Awaitable, Callable
-from http import HTTPStatus
 from itertools import pairwise
 from pathlib import Path
 from time import time
@@ -46,7 +45,7 @@ from urllib.parse import urljoin, urlsplit
 import anyio
 import anyio.to_thread
 import httpx2
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from ...core import store
 from ...core.config.constants import (
@@ -63,6 +62,7 @@ from ...core.schemas import KnownSource, Link
 from ...core.template import markdown_index
 from ...core.utils.parallel import gather
 from .schemas import (
+    Fetched,
     IndexEntry,
     LlmsIndex,
     Page,
@@ -83,36 +83,6 @@ _HEADING = re.compile(r"#{1,3} ")
 _HOSTNAME = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")
 _VERDICTS = TypeAdapter(dict[str, SourceVerdict])  # contents of the outcomes file, keyed by domain
 _SOURCES = TypeAdapter(list[KnownSource])  # contents of the user sources file
-
-
-class Fetched(BaseModel):
-    """A downloaded resource: status, content type and length, body (empty for HEAD)."""
-
-    status: int
-    content_type: str
-    content_length: int | None
-    body: bytes
-
-    @property
-    def ok(self) -> bool:
-        """Response status is not an error (below 400)."""
-        return self.status < HTTPStatus.BAD_REQUEST
-
-    @property
-    def cacheable(self) -> bool:
-        """Response is worth remembering: successes and stable failures, but not server errors or 429."""
-        return self.status < HTTPStatus.INTERNAL_SERVER_ERROR and self.status != HTTPStatus.TOO_MANY_REQUESTS
-
-    @property
-    def text(self) -> str:
-        """Body as text; bytes outside UTF-8 are replaced rather than failing the call."""
-        return self.body.decode("utf-8", "replace")
-
-    @property
-    def is_html(self) -> bool:
-        """Looks like HTML by content type or by the start of the body."""
-        head = self.body.lstrip()[:15].lower()
-        return self.content_type.lower().startswith("text/html") or head.startswith((b"<!doctype", b"<html"))
 
 
 def make_client(s: Settings, guard: Callable[[httpx2.Request], Awaitable[None]]) -> httpx2.AsyncClient:

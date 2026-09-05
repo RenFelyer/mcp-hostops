@@ -14,19 +14,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from time import time
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from .config.constants import PRIVATE_DIR_MODE
+from .schemas import Stamped
 
 _OBJECT = TypeAdapter(dict[str, JsonValue])
-
-
-class _Stamped(BaseModel):
-    """A record with a timestamp; the remaining fields are the content."""
-
-    model_config = ConfigDict(extra="allow")
-
-    checked_at: float
 
 
 def load(path: Path) -> dict[str, JsonValue] | None:
@@ -71,7 +64,7 @@ def load_stamped(path: Path) -> tuple[float, dict[str, JsonValue]]:
         empty content mean the file is missing, corrupt, or the timestamp isn't a number.
     """
     try:
-        stamped = _Stamped.model_validate(load(path))
+        stamped = Stamped.model_validate(load(path))
     except ValidationError:
         return float("inf"), {}
     return time() - stamped.checked_at, stamped.model_extra or {}

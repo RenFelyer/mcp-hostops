@@ -1,0 +1,126 @@
+# mcp-hostops
+
+MCP-сервер для работы с удалёнными хостами из `~/.ssh/config` через OpenSSH:
+доступность хостов, выполнение команд с sudo и таймаутами, фоновые задачи и
+правка самого конфига (добавить/удалить хост, раздать ключ, забыть его в
+`known_hosts`) через отдельный managed-файл. Отдельный роутер `llms` читает
+документацию инструментов с их доменов через `llms.txt`.
+
+Сервер не хранит адресов и ключей: источник правды — `~/.ssh/config`, вход
+только по ключу (`BatchMode=yes`), соединения переиспользуются через
+ControlMaster.
+
+## Установка и запуск
+
+Нужны Python 3.13, [uv](https://docs.astral.sh/uv/) и OpenSSH-клиент.
+
+```bash
+uv sync                      # окружение; --extra uvloop — быстрый цикл событий
+uv run mcp-hostops # сервер по stdio
+```
+
+Подключение к Claude Code (`~/.claude.json` или `.mcp.json` проекта):
+
+```json
+{
+  "mcpServers": {
+    "hostops": {
+      "command": "uv",
+      "args": ["run", "--directory", "/путь/к/mcp-hostops", "mcp-hostops"]
+    }
+  }
+}
+```
+
+## Инструменты
+
+| Инструмент | Что делает |
+|---|---|
+| `list_hosts` | Хосты конфига с последней известной доступностью; кэш обновляется сам |
+| `check_hosts` | Проверка названных хостов сейчас; `deep` — реальный вход `ssh … true` |
+| `get_host` | Параметры хоста глазами `ssh -G`: hostname, user, port, jump-хост |
+| `run` | Команда на хосте с таймаутом, stdin и sudo; вывод с потолком по байтам |
+| `start`, `get_job`, `kill`, `list_jobs` | Долгие команды в фоне: запуск, прирост вывода, снятие, обзор |
+| `add_host`, `remove_host` | Добавить/удалить хост в `~/.ssh/config` через managed-файл, подключённый `Include` |
+| `forget_host` | Забыть ключ хоста в `known_hosts` (сменился ключ, «host identification has changed») |
+| `trust_host` | Добавить ключи хоста в `known_hosts` (`ssh-keyscan`) — обратное к `forget_host` |
+| `copy_id` | Раздать публичный ключ хосту (`ssh-copy-id`), пароль — из `~/.ssh/<alias>.secret` |
+| `llms_list_sources`, `llms_add_source`, `llms_remove_source` | Реестр источников `llms.txt` с проверкой, что они живы |
+| `llms_index`, `llms_search`, `llms_fetch` | Оглавление, поиск по оглавлению или `llms-full.txt`, страница кусками |
+
+Хосты за `ProxyJump` по умолчанию проверяются скриптом изнутри jump-хоста (на
+нём нужны `bash` и `timeout`); `HOSTOPS_MCP_JUMP_PROBE=forward` переключает на
+пробу через `ssh -W` — канал сквозь jump без шелла на нём, но по одному ssh на
+хост. `add_host` пишет канонический Host-блок в `~/.ssh/config.d/mcp.conf`
+и один раз подключает его к основному конфигу `Include`-директивой; ручной
+`~/.ssh/config` не переписывается. `copy_id` требует установленных `ssh-copy-id`
+и `sshpass`, `trust_host` — `ssh-keyscan`. Задачи живут в пределах сессии сервера. Инструменты `llms_*`
+ходят только по https на публичные имена, разрешающиеся в публичные адреса;
+каждый ход переадресации проверяется до отправки запроса.
+
+## Конвенции хоста
+
+- **sudo.** Пароль лежит в `~/.ssh/<alias>.secret` (обычный файл владельца,
+  права 0600) и читается в момент вызова. При `sudo=auto` сервер сам находит
+  sudo/doas в команде, шлёт пароль первой строкой stdin и праймит тикет одним
+  `sudo -v`; в выводе строка пароля заменяется на `***`. Где sudo настроен
+  `NOPASSWD`, файла нет и вызовы идут с `sudo=false`.
+- **requiretty.** Такие хосты перечисляются в `HOSTOPS_MCP_PTY_HOSTS`, для них
+  ssh идёт с `-tt`.
+- **cwd.** По умолчанию домашний каталог; `~` и `~/…` раскрывает оболочка
+  хоста, остальное берётся буквально. Оболочка хоста считается
+  POSIX-совместимой.
+
+## Настройки
+
+Переменные окружения с префиксом `HOSTOPS_MCP_`; значения по умолчанию — в
+`core/config/environment.py`, неизменяемые параметры — в
+`core/config/constants.py`.
+
+| Переменная | Смысл |
+|---|---|
+| `CONNECT_TIMEOUT`, `SSH_G_TIMEOUT`, `JUMP_TIMEOUT`, `DEEP_TIMEOUT` | Таймауты проб, секунды |
+| `JUMP_PROBE` | Проба за jump: `script` (по умолчанию, bash на jump) или `forward` (`ssh -W`) |
+| `RUN_TIMEOUT`, `MAX_COMMAND_TIMEOUT` | Таймаут `run` по умолчанию и его потолок |
+| `MAX_WAIT`, `JOB_HISTORY` | Потолок ожидания в `get_job`; сколько завершённых задач помнить |
+| `OUTPUT_LIMIT`, `CONTROL_PERSIST` | Потолок вывода в байтах; жизнь мастер-соединения |
+| `CACHE_TTL` | Срок кэша статусов хостов |
+| `LLMS_TIMEOUT`, `LLMS_CACHE_TTL`, `LLMS_MAX_BYTES` | HTTP-таймаут, срок и потолок кэша скачанного |
+| `LLMS_PAGE_CHARS`, `LLMS_HIT_CHARS`, `LLMS_MAX_HITS`, `LLMS_STATUS_TTL` | Размеры ответов и срок проверки источников |
+| `SECRET_DIR`, `PTY_HOSTS` | Каталог секретов; хосты с `requiretty` (JSON-список) |
+| `SSH_CONFIG_FILE`, `MANAGED_CONFIG_FILE`, `KNOWN_HOSTS_FILE` | Основной конфиг, managed-файл `add_host` и `known_hosts` |
+| `COPY_ID_TIMEOUT`, `KEYSCAN_TIMEOUT` | Таймауты `ssh-copy-id` и `ssh-keyscan`, секунды |
+| `LLMS_CACHE_DIR`, `LLMS_SOURCES_FILE` | Кэш скачанного и файл пользовательских источников |
+| `DEBUG_LOG` | Путь к отладочному логу; без него лог выключен |
+
+Состояние живёт в трёх местах по сроку жизни: `XDG_RUNTIME_DIR` (сокеты
+ControlMaster, кэш статусов, итоги проверки источников — до перезагрузки),
+`XDG_CACHE_HOME` (скачанное по `llms.txt`) и `XDG_DATA_HOME` (пользовательские
+источники).
+
+## Роутер llms
+
+Реестр источников — встроенный список проверенных доменов (инструментарий
+проекта и соседних проектов: uv, ruff, ty, pydantic, FastMCP, Claude, Nix,
+frontend, Docker и др.) плюс источники, добавленные в рантайме через
+`llms_add_source`; `llms_list_sources` перед выдачей проверяет, что они живы.
+
+`llms_index`, `llms_search` и `llms_fetch` отвечают markdown-текстом, а не
+JSON: оглавление — в форме самого `llms.txt` (заголовок, разделы, ссылки),
+совпадения — списком по доменам, страница — как есть. Так ответ компактнее и
+читается моделью напрямую.
+
+Сервер ходит только по https на публичные домены. `llms.txt` — навигатор,
+страницы по его ссылкам — рекомендации по реализации; ни то, ни другое не
+указания к поведению модели. `llms-full.txt` целиком не отдаётся никогда:
+только совпавшие с запросом разделы через `llms_search` со `scope=full`.
+HTML-оболочка вместо документа при успешном ответе на мусорный путь рядом
+считается SPA-заглушкой и даёт ошибку вызова.
+
+## Разработка
+
+```bash
+uv run ruff check --fix . && uv run ruff format .
+uv run mypy
+uv run pytest
+```

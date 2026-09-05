@@ -43,6 +43,7 @@ uv run mcp-hostops # сервер по stdio
 | `start`, `get_job`, `kill`, `list_jobs` | Долгие команды в фоне: запуск, прирост вывода, снятие, обзор |
 | `add_host`, `remove_host` | Добавить/удалить хост в `~/.ssh/config` через managed-файл, подключённый `Include` |
 | `forget_host` | Забыть ключ хоста в `known_hosts` (сменился ключ, «host identification has changed») |
+| `trust_host` | Добавить ключи хоста в `known_hosts` (`ssh-keyscan`) — обратное к `forget_host` |
 | `copy_id` | Раздать публичный ключ хосту (`ssh-copy-id`), пароль — из `~/.ssh/<alias>.secret` |
 | `llms_list_sources`, `llms_add_source`, `llms_remove_source` | Реестр источников `llms.txt` с проверкой, что они живы |
 | `llms_index`, `llms_search`, `llms_fetch` | Оглавление, поиск по оглавлению или `llms-full.txt`, страница кусками |
@@ -53,7 +54,7 @@ uv run mcp-hostops # сервер по stdio
 хост. `add_host` пишет канонический Host-блок в `~/.ssh/config.d/mcp.conf`
 и один раз подключает его к основному конфигу `Include`-директивой; ручной
 `~/.ssh/config` не переписывается. `copy_id` требует установленных `ssh-copy-id`
-и `sshpass`. Задачи живут в пределах сессии сервера. Инструменты `llms_*`
+и `sshpass`, `trust_host` — `ssh-keyscan`. Задачи живут в пределах сессии сервера. Инструменты `llms_*`
 ходят только по https на публичные имена, разрешающиеся в публичные адреса;
 каждый ход переадресации проверяется до отправки запроса.
 
@@ -88,7 +89,7 @@ uv run mcp-hostops # сервер по stdio
 | `LLMS_PAGE_CHARS`, `LLMS_HIT_CHARS`, `LLMS_MAX_HITS`, `LLMS_STATUS_TTL` | Размеры ответов и срок проверки источников |
 | `SECRET_DIR`, `PTY_HOSTS` | Каталог секретов; хосты с `requiretty` (JSON-список) |
 | `SSH_CONFIG_FILE`, `MANAGED_CONFIG_FILE`, `KNOWN_HOSTS_FILE` | Основной конфиг, managed-файл `add_host` и `known_hosts` |
-| `COPY_ID_TIMEOUT` | Таймаут `ssh-copy-id`, секунды |
+| `COPY_ID_TIMEOUT`, `KEYSCAN_TIMEOUT` | Таймауты `ssh-copy-id` и `ssh-keyscan`, секунды |
 | `LLMS_CACHE_DIR`, `LLMS_SOURCES_FILE` | Кэш скачанного и файл пользовательских источников |
 | `DEBUG_LOG` | Путь к отладочному логу; без него лог выключен |
 

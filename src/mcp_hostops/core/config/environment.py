@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     jump_timeout: float = 4.0  # ssh to the jump host and probes behind it
     deep_timeout: float = 6.0  # a real login via `ssh ... true`
     jump_probe: JumpProbe = "script"  # "forward" — probe behind a jump via `ssh -W`, without a shell on it
+    keyscan_timeout: float = 10.0  # ssh-keyscan when trusting a host (also passed as its own -T)
 
     # ── command execution ───────────────────────────────────────────────────────
     run_timeout: float = 60.0  # default `run` timeout when the call doesn't set its own

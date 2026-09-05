@@ -33,7 +33,7 @@ from ...core.store import write_bytes
 from ...core.utils.hosts import config_files, read_aliases, resolve
 from ...core.utils.ssh import run_sync
 from ...core.utils.sudo import mask, read_secret
-from .schemas import AddHostResult, CopyIdResult, ForgetHostResult, ManagedHost, RemoveHostResult
+from .schemas import AddHostResult, CopyIdResult, ForgetHostResult, ManagedHost, RemoveHostResult, TrustHostResult
 
 # Line opening a Host block: keyword `Host`, form `Host x` or `Host=x`.
 _HOST_LINE = re.compile(r"(?i)^\s*host[\s=]")
@@ -192,6 +192,52 @@ def forget_host(target: str) -> ForgetHostResult:
         known_hosts_file=str(s.known_hosts_file),
         removed=_forget(host, s) if host is not None else _keygen_remove([target], s.known_hosts_file),
     )
+
+
+def trust_host(target: str) -> TrustHostResult:
+    """Fetch a host's keys with ssh-keyscan and add them to known_hosts.
+
+    The inverse of forget_host: afterwards a non-interactive ssh to the host
+    won't stop on the trust prompt. `target` is an alias from the config (its
+    hostname and port are scanned) or a hostname/IP. Any existing entries for
+    the host are removed first, so re-trusting after a key change leaves no
+    duplicates. A host that returns no keys leaves known_hosts untouched.
+
+    Raises:
+        UserError: ssh-keyscan is missing or exceeded the timeout.
+    """
+    s = get_settings()
+    if shutil.which("ssh-keyscan") is None:
+        raise UserError("ssh-keyscan not found")
+    host = resolve(target, s.ssh_g_timeout)
+    hostname = host.hostname if host is not None else target
+    port = host.port if host is not None else SSH_DEFAULT_PORT
+    argv = ["ssh-keyscan", "-T", str(max(1, int(s.keyscan_timeout)))]
+    if port != SSH_DEFAULT_PORT:
+        argv += ["-p", str(port)]
+    argv.append(hostname)
+    try:
+        done = run_sync(argv, s.keyscan_timeout + 1)
+    except subprocess.TimeoutExpired as err:
+        raise UserError(f"ssh-keyscan: timeout after {s.keyscan_timeout}s") from err
+    except OSError as err:
+        raise UserError(f"ssh-keyscan failed to start: {err}") from err
+    # ssh-keyscan writes host-key lines to stdout and `#` diagnostics to stderr.
+    keys = [line for line in done.stdout.splitlines() if line.strip() and not line.startswith("#")]
+    if keys:
+        if host is not None:
+            _forget(host, s)  # drop old entries (hostname and [host]:port) so re-trust doesn't duplicate
+        else:
+            _keygen_remove([hostname], s.known_hosts_file)
+        _append_known_hosts(keys, s.known_hosts_file)
+    return TrustHostResult(target=hostname, known_hosts_file=str(s.known_hosts_file), added=len(keys))
+
+
+def _append_known_hosts(lines: list[str], known_file: Path) -> None:
+    """Append known_hosts entries, creating the file (and ~/.ssh) if needed."""
+    known_file.parent.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
+    with known_file.open("a", encoding="utf-8") as file:
+        file.writelines(f"{line}\n" for line in lines)
 
 
 def copy_id(alias: str, identity: str) -> CopyIdResult:

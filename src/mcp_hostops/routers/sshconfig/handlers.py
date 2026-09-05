@@ -11,7 +11,7 @@ from mcp_types import ToolAnnotations
 
 from ...core.schemas import NonEmptyStr, Port
 from . import services
-from .schemas import AddHostResult, CopyIdResult, ForgetHostResult, ManagedHost, RemoveHostResult
+from .schemas import AddHostResult, CopyIdResult, ForgetHostResult, ManagedHost, RemoveHostResult, TrustHostResult
 
 router: FastMCP = FastMCP(name="sshconfig", on_duplicate="error")
 
@@ -96,15 +96,15 @@ async def forget_host(target: NonEmptyStr) -> ForgetHostResult:
     return await anyio.to_thread.run_sync(services.forget_host, target)
 
 
-@router.tool(
-    title="Install key on host",
-    tags={"sshconfig"},
-    # Connects to the host and edits its authorized_keys; ssh-copy-id skips a key
-    # that's already installed, so repeating is safe.
-    annotations=ToolAnnotations(
-        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
-    ),
+# Reaches out to the host over the network and writes trust/keys; re-running lands
+# the same state. Shared by copy_id (its authorized_keys) and trust_host (our
+# known_hosts) — what each one writes is spelled out in its docstring.
+_CONNECTS_IDEMPOTENT = ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
 )
+
+
+@router.tool(title="Install key on host", tags={"sshconfig"}, annotations=_CONNECTS_IDEMPOTENT)
 async def copy_id(alias: NonEmptyStr, identity: str = "") -> CopyIdResult:
     """Install a public key on the host (ssh-copy-id); the password comes from the secret.
 
@@ -117,3 +117,19 @@ async def copy_id(alias: NonEmptyStr, identity: str = "") -> CopyIdResult:
         identity: Path to the public key (-i); empty — the default key.
     """
     return await anyio.to_thread.run_sync(services.copy_id, alias, identity)
+
+
+@router.tool(title="Trust host key", tags={"sshconfig"}, annotations=_CONNECTS_IDEMPOTENT)
+async def trust_host(target: NonEmptyStr) -> TrustHostResult:
+    """Fetch a host's keys (ssh-keyscan) and add them to known_hosts.
+
+    The inverse of forget_host: afterwards a non-interactive ssh to the host
+    won't stop on the trust prompt. Existing entries for the host are replaced,
+    so it's safe to re-run after a key change. A host that returns no keys leaves
+    known_hosts untouched.
+
+    Args:
+        target: Alias from ~/.ssh/config (its hostname and port are scanned) or
+            a hostname/IP.
+    """
+    return await anyio.to_thread.run_sync(services.trust_host, target)

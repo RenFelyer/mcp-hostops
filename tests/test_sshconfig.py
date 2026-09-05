@@ -331,3 +331,110 @@ def test_keygen_remove_skips_failing_name(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(services, "run_sync", boom)
     assert services._keygen_remove(["a.example"], kh) == 0  # failure skipped, nothing removed
+
+
+# ── trust_host (ssh-keyscan) ───────────────────────────────────────────────────────
+
+
+def _keyscan_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    s = _settings(tmp_path)
+    _use(s, monkeypatch)
+    monkeypatch.setattr(services, "resolve", _fake_resolve)  # box -> 10.0.0.5:22
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    return s
+
+
+def test_trust_host_adds_scanned_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _keyscan_ready(tmp_path, monkeypatch)
+
+    def fake_run(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        if argv[0] == "ssh-keyscan":
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="10.0.0.5 ssh-ed25519 AAAAKEY\n10.0.0.5 ssh-rsa AAAARSA\n", stderr=""
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")  # ssh-keygen -R
+
+    monkeypatch.setattr(services, "run_sync", fake_run)
+    res = services.trust_host("box")
+    assert res.added == 2
+    assert res.target == "10.0.0.5"
+    content = s.known_hosts_file.read_text()
+    assert "ssh-ed25519 AAAAKEY" in content
+    assert "ssh-rsa AAAARSA" in content
+
+
+def test_trust_host_no_keys_leaves_file_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _keyscan_ready(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        services, "run_sync", lambda _argv, _t: subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    )
+    res = services.trust_host("box")
+    assert res.added == 0
+    assert not s.known_hosts_file.exists()
+
+
+def test_trust_host_raw_hostname_default_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _settings(tmp_path)
+    _use(s, monkeypatch)
+    monkeypatch.setattr(services, "resolve", lambda _t, _to: None)  # not in config -> raw hostname
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    seen: list[list[str]] = []
+
+    def fake_run(argv: list[str], _t: float) -> subprocess.CompletedProcess[str]:
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="1.2.3.4 ssh-ed25519 AAAA\n", stderr="")
+
+    monkeypatch.setattr(services, "run_sync", fake_run)
+    res = services.trust_host("1.2.3.4")
+    assert (res.target, res.added) == ("1.2.3.4", 1)
+    assert seen[0][0] == "ssh-keyscan"
+    assert "-p" not in seen[0]  # default port: no -p
+
+
+def test_trust_host_scans_nonstandard_port(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _settings(tmp_path)
+    _use(s, monkeypatch)
+    monkeypatch.setattr(
+        services, "resolve", lambda _t, _to: Host(alias="box", hostname="10.0.0.5", user="u", port=2222, proxyjump="")
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    seen: list[list[str]] = []
+
+    def fake_run(argv: list[str], _t: float) -> subprocess.CompletedProcess[str]:
+        seen.append(argv)
+        out = "[10.0.0.5]:2222 ssh-ed25519 AAAA\n" if argv[0] == "ssh-keyscan" else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(services, "run_sync", fake_run)
+    assert services.trust_host("box").added == 1
+    assert "-p" in seen[0]
+    assert "2222" in seen[0]
+
+
+def test_trust_host_requires_keyscan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use(_settings(tmp_path), monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(UserError, match="ssh-keyscan not found"):
+        services.trust_host("box")
+
+
+def test_trust_host_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _keyscan_ready(tmp_path, monkeypatch)
+
+    def boom(_argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd="ssh-keyscan", timeout=timeout)
+
+    monkeypatch.setattr(services, "run_sync", boom)
+    with pytest.raises(UserError, match="timeout"):
+        services.trust_host("box")
+
+
+def test_trust_host_start_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _keyscan_ready(tmp_path, monkeypatch)
+
+    def boom(_argv: list[str], _t: float) -> subprocess.CompletedProcess[str]:
+        raise OSError("cannot exec")
+
+    monkeypatch.setattr(services, "run_sync", boom)
+    with pytest.raises(UserError, match="failed to start"):
+        services.trust_host("box")

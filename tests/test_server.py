@@ -37,6 +37,7 @@ EXPECTED = {
     "add_host",
     "remove_host",
     "forget_host",
+    "trust_host",
     "copy_id",
 }
 

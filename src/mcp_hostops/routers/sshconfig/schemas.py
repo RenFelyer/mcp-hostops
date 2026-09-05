@@ -42,6 +42,14 @@ class ForgetHostResult(BaseModel):
     removed: int = Field(description="entries removed")
 
 
+class TrustHostResult(BaseModel):
+    """Response of trust_host: host keys fetched with ssh-keyscan and added to known_hosts."""
+
+    target: str = Field(description="host name that was scanned")
+    known_hosts_file: str
+    added: int = Field(description="keys added; 0 — the host returned none")
+
+
 class CopyIdResult(BaseModel):
     """Response of copy_id: installing a public key on the host."""
 

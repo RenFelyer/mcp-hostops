@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from mcp_openssh_connector.core.config.environment import Settings
-from mcp_openssh_connector.core.utils.sudo import (
+from mcp_hostops.core.config.environment import Settings
+from mcp_hostops.core.utils.sudo import (
     SudoError,
     decide_prime,
     mask,

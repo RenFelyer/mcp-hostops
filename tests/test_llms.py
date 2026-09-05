@@ -8,13 +8,13 @@ import anyio
 import httpx2
 import pytest
 
-from mcp_openssh_connector.core.config import constants
-from mcp_openssh_connector.core.config.environment import Settings, get_settings
-from mcp_openssh_connector.core.errors import UserError
-from mcp_openssh_connector.core.schemas import KnownSource
-from mcp_openssh_connector.routers.llms import services
-from mcp_openssh_connector.routers.llms.schemas import LlmsIndex, SearchResult, SearchScope, SourceStatus
-from mcp_openssh_connector.routers.llms.services import Session
+from mcp_hostops.core.config import constants
+from mcp_hostops.core.config.environment import Settings, get_settings
+from mcp_hostops.core.errors import UserError
+from mcp_hostops.core.schemas import KnownSource
+from mcp_hostops.routers.llms import services
+from mcp_hostops.routers.llms.schemas import LlmsIndex, SearchResult, SearchScope, SourceStatus
+from mcp_hostops.routers.llms.services import Session
 
 INDEX = """# Ruff
 
@@ -210,7 +210,7 @@ def test_index_search_fetch_end_to_end(home: Path, monkeypatch: pytest.MonkeyPat
     anyio.run(scenario)
     # The cache holds the index, full file, page and a HEAD for each variant;
     # no junk probe — text responses don't need one.
-    bodies = list((home / "cache" / "mcp-openssh-connector" / "llms").rglob("*.body"))
+    bodies = list((home / "cache" / "mcp-hostops" / "llms").rglob("*.body"))
     assert len(bodies) == 3 + len(constants.LLMS_VARIANTS)
 
 
@@ -399,7 +399,7 @@ def test_cache_respects_ttl_and_skips_server_errors(home: Path, monkeypatch: pyt
 
     anyio.run(fetch, "https://h.example/a.txt", 2)
     assert calls == 1  # second time comes from the cache
-    meta = next((home / "cache" / "mcp-openssh-connector").rglob("*.meta"))
+    meta = next((home / "cache" / "mcp-hostops").rglob("*.meta"))
     assert json.loads(meta.read_text())["status"] == 200
     monkeypatch.setattr(s, "llms_cache_ttl", 0.0)
     anyio.run(fetch, "https://h.example/a.txt", 1)

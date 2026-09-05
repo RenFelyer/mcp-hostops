@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from mcp_openssh_connector.core.config.environment import Settings
-from mcp_openssh_connector.core.schemas import Host
-from mcp_openssh_connector.core.utils.ssh import (
+from mcp_hostops.core.config.environment import Settings
+from mcp_hostops.core.schemas import Host
+from mcp_hostops.core.utils.ssh import (
     Invocation,
     Output,
     build_stdin,

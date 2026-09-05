@@ -124,7 +124,7 @@ def make_client(s: Settings, guard: Callable[[httpx2.Request], Awaitable[None]])
         timeout=s.llms_timeout,
         follow_redirects=True,
         max_redirects=LLMS_REDIRECTS,
-        headers={"User-Agent": "mcp-openssh-connector (llms.txt reader)"},
+        headers={"User-Agent": "mcp-hostops (llms.txt reader)"},
         event_hooks={"request": [guard]},
     )
 

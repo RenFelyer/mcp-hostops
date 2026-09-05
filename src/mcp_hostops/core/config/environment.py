@@ -1,6 +1,6 @@
 """Server settings: timeouts, thresholds, paths to state.
 
-Values are read from the environment with the `OPENSSH_MCP_` prefix. State lives in
+Values are read from the environment with the `HOSTOPS_MCP_` prefix. State lives in
 three places by lifetime: the runtime directory (ControlMaster sockets, host status
 cache, llms source check results — until reboot), the cache (downloaded via `llms.txt`,
 sometimes tens of megabytes), and data (user-defined llms sources — must not be lost).
@@ -38,7 +38,7 @@ def _runtime_dir() -> Path:
 class Settings(BaseSettings):
     """Settings fields with defaults; each one's meaning is in the comment beside it."""
 
-    model_config = SettingsConfigDict(env_prefix="OPENSSH_MCP_")
+    model_config = SettingsConfigDict(env_prefix="HOSTOPS_MCP_")
 
     # ── probe timeouts (seconds) ────────────────────────────────────────────────
     connect_timeout: float = 1.0  # a direct TCP connect and ssh's ConnectTimeout
@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     copy_id_timeout: float = 30.0  # seconds for ssh-copy-id (logging in and writing the key to the host)
 
     # Hosts where sudo requires a terminal: ssh runs with `-tt` for them.
-    # In the environment this is a JSON list: OPENSSH_MCP_PTY_HOSTS='["a","b"]'.
+    # In the environment this is a JSON list: HOSTOPS_MCP_PTY_HOSTS='["a","b"]'.
     pty_hosts: frozenset[str] = frozenset()
 
     # The debug log file; without it, logging is disabled (see `logger`).

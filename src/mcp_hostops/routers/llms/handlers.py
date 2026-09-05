@@ -13,6 +13,7 @@ text.
 
 from typing import Annotated
 
+import anyio.to_thread
 from fastmcp import FastMCP
 from mcp_types import ToolAnnotations
 from pydantic import Field
@@ -26,7 +27,7 @@ router: FastMCP = FastMCP(name="llms", on_duplicate="error")
 
 
 @router.tool(title="llms.txt registry", tags={"llms"}, annotations=READS_REMOTE)
-async def llms_sources(refresh: bool = False) -> SourcesResult:
+async def llms_list_sources(refresh: bool = False) -> SourcesResult:
     """Known `llms.txt` sources, each with the outcome of a liveness check.
 
     Built-in (default) sources plus ones added via llms_add_source. Before
@@ -80,9 +81,9 @@ async def llms_remove_source(domain: NonEmptyStr) -> KnownSource:
     """Remove an added source from the registry; built-in sources can't be removed.
 
     Args:
-        domain: Source name from llms_sources.
+        domain: Source name from llms_list_sources.
     """
-    return remove_source(domain, get_settings())
+    return await anyio.to_thread.run_sync(remove_source, domain, get_settings())
 
 
 @router.tool(title="llms.txt index", tags={"llms"}, annotations=READS_REMOTE)
@@ -97,7 +98,7 @@ async def llms_index(source: NonEmptyStr) -> LlmsIndex:
     actually exist on the domain and their size.
 
     Args:
-        source: Domain from llms_sources (`docs.astral.sh/uv`), any other
+        source: Domain from llms_list_sources (`docs.astral.sh/uv`), any other
             domain, or a full index address; https on a public name only.
     """
     async with Session() as session:
@@ -119,7 +120,7 @@ async def llms_search(
         query: Words separated by spaces.
         source: Domain or index address, same as llms_index; without it,
             searches the tables of contents of all live sources from
-            llms_sources.
+            llms_list_sources.
         scope: index — over link titles and descriptions; full — over
             sections of one source's `llms-full.txt`, when the topic isn't
             visible in the table of contents.

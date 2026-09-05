@@ -3,11 +3,11 @@
 import anyio
 import pytest
 
-from mcp_openssh_connector.core.config.environment import get_settings
-from mcp_openssh_connector.core.errors import UserError
-from mcp_openssh_connector.core.utils.ssh import Capture, Output
-from mcp_openssh_connector.routers.jobs.schemas import JobRef, JobStatus
-from mcp_openssh_connector.routers.jobs.services import Job, JobManager
+from mcp_hostops.core.config.environment import get_settings
+from mcp_hostops.core.errors import UserError
+from mcp_hostops.core.utils.ssh import Capture, Output
+from mcp_hostops.routers.jobs.schemas import JobRef, JobStatus
+from mcp_hostops.routers.jobs.services import Job, JobManager
 
 
 def _job(job_id: str, status: JobStatus = "done") -> Job:

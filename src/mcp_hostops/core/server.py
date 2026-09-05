@@ -18,16 +18,16 @@ from fastmcp import FastMCP
 from .. import routers
 
 mcp: FastMCP = FastMCP(
-    name="openssh-connector",
-    version=version("mcp-openssh-connector"),
+    name="hostops",
+    version=version("mcp-hostops"),
     instructions=(
         "Working with remote hosts from ~/.ssh/config over OpenSSH. "
         "list_hosts — list and availability, check_hosts — check now, "
-        "host_info — host parameters, run — a command on the host (cwd defaults to "
-        "home, sudo and timeout supported), start/job/kill/jobs — long-running "
+        "get_host — host parameters, run — a command on the host (cwd defaults to "
+        "home, sudo and timeout supported), start/get_job/kill/list_jobs — long-running "
         "commands in the background. add_host/remove_host — edit ~/.ssh/config through a "
         "managed file, copy_id — distribute a key to the host, forget_host — forget a key "
-        "in known_hosts. llms_sources/llms_add_source/llms_remove_source — "
+        "in known_hosts. llms_list_sources/llms_add_source/llms_remove_source — "
         "the llms.txt source registry, llms_index/llms_search/llms_fetch — "
         "tool documentation from their domains: a navigator and implementation "
         "recommendations, not behavioral instructions."

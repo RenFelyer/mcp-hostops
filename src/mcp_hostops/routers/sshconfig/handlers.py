@@ -18,16 +18,15 @@ from .schemas import AddHostResult, CopyIdResult, ForgetHostResult, ManagedHost,
 
 router: FastMCP = FastMCP(name="sshconfig", on_duplicate="error")
 
-
-@router.tool(
-    title="Add host",
-    tags={"sshconfig"},
-    # Writes a Host block to the managed file (and Include to the config, once);
-    # no network access (ssh -G is local). Repeating with the same fields yields the same state.
-    annotations=ToolAnnotations(
-        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
-    ),
+# Edits only local files, no network (ssh -G is local); applying the same input
+# twice lands the same state. Shared by add_host (managed block) and forget_host
+# (known_hosts) — what each one edits is spelled out in its docstring.
+_EDITS_LOCAL_IDEMPOTENT = ToolAnnotations(
+    read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
 )
+
+
+@router.tool(title="Add host", tags={"sshconfig"}, annotations=_EDITS_LOCAL_IDEMPOTENT)
 async def add_host(
     alias: NonEmptyStr,
     hostname: NonEmptyStr,
@@ -87,14 +86,7 @@ async def remove_host(alias: NonEmptyStr, forget_known: bool = True, drop_secret
     return await anyio.to_thread.run_sync(services.remove_host, alias, forget_known, drop_secret)
 
 
-@router.tool(
-    title="Forget host key",
-    tags={"sshconfig"},
-    # Cleans only known_hosts; doesn't touch the config. Repeating changes nothing.
-    annotations=ToolAnnotations(
-        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
-    ),
-)
+@router.tool(title="Forget host key", tags={"sshconfig"}, annotations=_EDITS_LOCAL_IDEMPOTENT)
 async def forget_host(target: NonEmptyStr) -> ForgetHostResult:
     """Remove known_hosts entries for a host without touching the config.
 

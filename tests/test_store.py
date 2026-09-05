@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mcp_openssh_connector.core import store
+from mcp_hostops.core import store
 
 
 def test_save_atomic_and_load_tolerant(tmp_path: Path) -> None:

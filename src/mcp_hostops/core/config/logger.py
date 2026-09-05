@@ -1,6 +1,6 @@
 """Debug logging to a file; disabled during normal operation.
 
-Enabled by the `OPENSSH_MCP_DEBUG_LOG=<path>` variable: then everything from DEBUG level
+Enabled by the `HOSTOPS_MCP_DEBUG_LOG=<path>` variable: then everything from DEBUG level
 up, including fastmcp, is written to that file. The file is kept at mode 0600 — records
 sometimes contain commands and host names. Without the variable, no handlers are added,
 and the server over stdio outputs nothing extra. The sudo password never ends up in the

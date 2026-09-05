@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from mcp_openssh_connector.core.config.environment import Settings
-from mcp_openssh_connector.core.errors import UserError
-from mcp_openssh_connector.core.schemas import Host
-from mcp_openssh_connector.core.utils.hosts import read_aliases
-from mcp_openssh_connector.routers.sshconfig import services
-from mcp_openssh_connector.routers.sshconfig.schemas import ManagedHost
+from mcp_hostops.core.config.environment import Settings
+from mcp_hostops.core.errors import UserError
+from mcp_hostops.core.schemas import Host
+from mcp_hostops.core.utils.hosts import read_aliases
+from mcp_hostops.routers.sshconfig import services
+from mcp_hostops.routers.sshconfig.schemas import ManagedHost
 
 
 def _settings(tmp: Path) -> Settings:

@@ -7,11 +7,11 @@ from types import TracebackType
 import anyio
 import pytest
 
-from mcp_openssh_connector.core.config.environment import get_settings
-from mcp_openssh_connector.core.errors import UserError
-from mcp_openssh_connector.core.schemas import Host
-from mcp_openssh_connector.routers.commands import services
-from mcp_openssh_connector.routers.commands.schemas import RunResult
+from mcp_hostops.core.config.environment import get_settings
+from mcp_hostops.core.errors import UserError
+from mcp_hostops.core.schemas import Host
+from mcp_hostops.routers.commands import services
+from mcp_hostops.routers.commands.schemas import RunResult
 
 
 class _FakeReceive:

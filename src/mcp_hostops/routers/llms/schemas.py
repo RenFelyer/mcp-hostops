@@ -25,7 +25,7 @@ class SourceStatus(KnownSource, SourceVerdict):
 
 
 class SourcesResult(Checked):
-    """Response of `llms_sources`: the checked registry and known variant names."""
+    """Response of `llms_list_sources`: the checked registry and known variant names."""
 
     sources: list[SourceStatus]
     variants: list[str] = Field(description="file names that llms_index looks for on a domain")

@@ -46,7 +46,7 @@ async def check_hosts(
 
 
 @router.tool(title="Host parameters", tags={"hosts"}, annotations=READS_LOCAL)
-async def host_info(alias: NonEmptyStr) -> Host:
+async def get_host(alias: NonEmptyStr) -> Host:
     """Parameters of a single host as ssh sees them: hostname, user, port, jump host.
 
     Args:

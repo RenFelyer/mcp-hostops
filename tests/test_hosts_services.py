@@ -2,10 +2,10 @@
 
 import pytest
 
-from mcp_openssh_connector.core import cache
-from mcp_openssh_connector.core.config.environment import Settings
-from mcp_openssh_connector.core.schemas import Host
-from mcp_openssh_connector.routers.hosts import services
+from mcp_hostops.core import cache
+from mcp_hostops.core.config.environment import Settings
+from mcp_hostops.core.schemas import Host
+from mcp_hostops.routers.hosts import services
 
 
 def _host(alias: str) -> Host:

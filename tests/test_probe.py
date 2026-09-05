@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from mcp_openssh_connector.core.config.environment import Settings
-from mcp_openssh_connector.core.schemas import Host
-from mcp_openssh_connector.core.utils import probe
-from mcp_openssh_connector.core.utils.probe import _jump_script
+from mcp_hostops.core.config.environment import Settings
+from mcp_hostops.core.schemas import Host
+from mcp_hostops.core.utils import probe
+from mcp_hostops.core.utils.probe import _jump_script
 
 
 def _host(hostname: str, alias: str = "x", proxyjump: str = "j") -> Host:

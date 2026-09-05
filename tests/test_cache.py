@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from mcp_openssh_connector.core import cache
-from mcp_openssh_connector.core.config.environment import Settings
+from mcp_hostops.core import cache
+from mcp_hostops.core.config.environment import Settings
 
 
 @pytest.fixture

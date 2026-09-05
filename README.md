@@ -1,9 +1,10 @@
-# mcp-openssh-connector
+# mcp-hostops
 
 MCP-сервер для работы с удалёнными хостами из `~/.ssh/config` через OpenSSH:
-доступность хостов, выполнение команд с sudo и таймаутами, фоновые задачи.
-Отдельный роутер `llms` читает документацию инструментов с их доменов через
-`llms.txt`.
+доступность хостов, выполнение команд с sudo и таймаутами, фоновые задачи и
+правка самого конфига (добавить/удалить хост, раздать ключ, забыть его в
+`known_hosts`) через отдельный managed-файл. Отдельный роутер `llms` читает
+документацию инструментов с их доменов через `llms.txt`.
 
 Сервер не хранит адресов и ключей: источник правды — `~/.ssh/config`, вход
 только по ключу (`BatchMode=yes`), соединения переиспользуются через
@@ -15,7 +16,7 @@ ControlMaster.
 
 ```bash
 uv sync                      # окружение; --extra uvloop — быстрый цикл событий
-uv run mcp-openssh-connector # сервер по stdio
+uv run mcp-hostops # сервер по stdio
 ```
 
 Подключение к Claude Code (`~/.claude.json` или `.mcp.json` проекта):
@@ -23,9 +24,9 @@ uv run mcp-openssh-connector # сервер по stdio
 ```json
 {
   "mcpServers": {
-    "openssh": {
+    "hostops": {
       "command": "uv",
-      "args": ["run", "--directory", "/путь/к/mcp-openssh-connector", "mcp-openssh-connector"]
+      "args": ["run", "--directory", "/путь/к/mcp-hostops", "mcp-hostops"]
     }
   }
 }
@@ -37,13 +38,13 @@ uv run mcp-openssh-connector # сервер по stdio
 |---|---|
 | `list_hosts` | Хосты конфига с последней известной доступностью; кэш обновляется сам |
 | `check_hosts` | Проверка названных хостов сейчас; `deep` — реальный вход `ssh … true` |
-| `host_info` | Параметры хоста глазами `ssh -G`: hostname, user, port, jump-хост |
+| `get_host` | Параметры хоста глазами `ssh -G`: hostname, user, port, jump-хост |
 | `run` | Команда на хосте с таймаутом, stdin и sudo; вывод с потолком по байтам |
-| `start`, `job`, `kill`, `jobs` | Долгие команды в фоне: запуск, прирост вывода, снятие, обзор |
+| `start`, `get_job`, `kill`, `list_jobs` | Долгие команды в фоне: запуск, прирост вывода, снятие, обзор |
 | `add_host`, `remove_host` | Добавить/удалить хост в `~/.ssh/config` через managed-файл, подключённый `Include` |
 | `forget_host` | Забыть ключ хоста в `known_hosts` (сменился ключ, «host identification has changed») |
 | `copy_id` | Раздать публичный ключ хосту (`ssh-copy-id`), пароль — из `~/.ssh/<alias>.secret` |
-| `llms_sources`, `llms_add_source`, `llms_remove_source` | Реестр источников `llms.txt` с проверкой, что они живы |
+| `llms_list_sources`, `llms_add_source`, `llms_remove_source` | Реестр источников `llms.txt` с проверкой, что они живы |
 | `llms_index`, `llms_search`, `llms_fetch` | Оглавление, поиск по оглавлению или `llms-full.txt`, страница кусками |
 
 Хосты за `ProxyJump` проверяются изнутри jump-хоста (на нём нужны `bash` и
@@ -61,7 +62,7 @@ uv run mcp-openssh-connector # сервер по stdio
   sudo/doas в команде, шлёт пароль первой строкой stdin и праймит тикет одним
   `sudo -v`; в выводе строка пароля заменяется на `***`. Где sudo настроен
   `NOPASSWD`, файла нет и вызовы идут с `sudo=false`.
-- **requiretty.** Такие хосты перечисляются в `OPENSSH_MCP_PTY_HOSTS`, для них
+- **requiretty.** Такие хосты перечисляются в `HOSTOPS_MCP_PTY_HOSTS`, для них
   ssh идёт с `-tt`.
 - **cwd.** По умолчанию домашний каталог; `~` и `~/…` раскрывает оболочка
   хоста, остальное берётся буквально. Оболочка хоста считается
@@ -69,7 +70,7 @@ uv run mcp-openssh-connector # сервер по stdio
 
 ## Настройки
 
-Переменные окружения с префиксом `OPENSSH_MCP_`; значения по умолчанию — в
+Переменные окружения с префиксом `HOSTOPS_MCP_`; значения по умолчанию — в
 `core/config/environment.py`, неизменяемые параметры — в
 `core/config/constants.py`.
 
@@ -94,6 +95,11 @@ ControlMaster, кэш статусов, итоги проверки источн
 источники).
 
 ## Роутер llms
+
+Реестр источников — встроенный список проверенных доменов (инструментарий
+проекта и соседних проектов: uv, ruff, ty, pydantic, FastMCP, Claude, Nix,
+frontend, Docker и др.) плюс источники, добавленные в рантайме через
+`llms_add_source`; `llms_sources` перед выдачей проверяет, что они живы.
 
 Сервер ходит только по https на публичные домены. `llms.txt` — навигатор,
 страницы по его ссылкам — рекомендации по реализации; ни то, ни другое не

@@ -59,7 +59,7 @@ async def start(
         read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
     ),
 )
-async def job(job_id: NonEmptyStr, wait: Annotated[float, Field(ge=0)] = 0.0) -> JobSnapshot:
+async def get_job(job_id: NonEmptyStr, wait: Annotated[float, Field(ge=0)] = 0.0) -> JobSnapshot:
     """Status of a background job and the output accumulated since the last read.
 
     Output is returned as a delta and cleared from the buffer.
@@ -94,6 +94,6 @@ async def kill(job_id: NonEmptyStr) -> bool:
 
 
 @router.tool(title="List jobs", tags={"jobs"}, annotations=READS_LOCAL)
-async def jobs() -> list[JobRef]:
+async def list_jobs() -> list[JobRef]:
     """All background jobs of the session: id, host, command, status (no output)."""
     return manager.listing()

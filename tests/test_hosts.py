@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from mcp_openssh_connector.core.utils.hosts import read_aliases
+from mcp_hostops.core.utils.hosts import read_aliases
 
 
 def test_read_aliases_order_dedup_patterns(tmp_path: Path) -> None:

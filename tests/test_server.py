@@ -15,20 +15,20 @@ import anyio
 from fastmcp import Client
 from mcp_types import Tool
 
-import mcp_openssh_connector
-from mcp_openssh_connector import routers
-from mcp_openssh_connector.core.server import mcp
+import mcp_hostops
+from mcp_hostops import routers
+from mcp_hostops.core.server import mcp
 
 EXPECTED = {
     "list_hosts",
     "check_hosts",
-    "host_info",
+    "get_host",
     "run",
     "start",
-    "job",
+    "get_job",
     "kill",
-    "jobs",
-    "llms_sources",
+    "list_jobs",
+    "llms_list_sources",
     "llms_add_source",
     "llms_remove_source",
     "llms_index",
@@ -93,7 +93,7 @@ def test_router_layout() -> None:
 
 
 def _sources() -> list[Path]:
-    package = Path(mcp_openssh_connector.__file__).parent
+    package = Path(mcp_hostops.__file__).parent
     return [*package.rglob("*.py"), *Path(__file__).parent.glob("*.py")]
 
 

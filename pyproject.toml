@@ -107,4 +107,4 @@ source = ["mcp_hostops"]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 85  # текущее ~87%; порог чуть ниже, поднимать храповиком по мере тестов
+fail_under = 93  # текущее ~95%; порог чуть ниже, поднимать храповиком по мере тестов

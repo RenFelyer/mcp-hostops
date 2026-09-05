@@ -248,3 +248,86 @@ def test_copy_id_requires_sshpass(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(shutil, "which", lambda name: None if name == "sshpass" else f"/usr/bin/{name}")
     with pytest.raises(UserError, match="sshpass"):
         services.copy_id("box", "")
+
+
+def _copy_id_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    s = _settings(tmp_path)
+    _use(s, monkeypatch)
+    _config_with("box", s)
+    s.secret_file("box").write_text("pw", encoding="utf-8")
+    s.secret_file("box").chmod(0o600)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    return s
+
+
+def test_copy_id_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _copy_id_ready(tmp_path, monkeypatch)
+
+    def boom(_argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd="ssh-copy-id", timeout=timeout)
+
+    monkeypatch.setattr(services, "run_sync", boom)
+    with pytest.raises(UserError, match="timeout"):
+        services.copy_id("box", "")
+
+
+def test_copy_id_start_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _copy_id_ready(tmp_path, monkeypatch)
+
+    def boom(_argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        raise OSError("cannot exec")
+
+    monkeypatch.setattr(services, "run_sync", boom)
+    with pytest.raises(UserError, match="failed to start"):
+        services.copy_id("box", "")
+
+
+# ── internals: missing files, ports, ssh-keygen edges ────────────────────────────
+
+
+def test_read_blocks_missing_file(tmp_path: Path) -> None:
+    assert services._read_blocks(_settings(tmp_path)) == []
+
+
+def test_remove_host_drop_secret_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    s = _settings(tmp_path)
+    _use(s, monkeypatch)
+    monkeypatch.setattr(services, "resolve", _fake_resolve)
+    monkeypatch.setattr(services, "_forget", lambda *_: 0)
+    services.add_host(ManagedHost(alias="box", hostname="10.0.0.5"))
+    res = services.remove_host("box", forget_known=False, drop_secret=True)
+    assert res.secret_removed is False  # nothing to drop
+
+
+def test_forget_appends_bracketed_port_when_nonstandard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def record(names: list[str], _kh: Path) -> int:
+        seen.extend(names)
+        return 0
+
+    monkeypatch.setattr(services, "_keygen_remove", record)
+    host = Host(alias="box", hostname="10.0.0.5", user="u", port=2222, proxyjump="")
+    services._forget(host, _settings(tmp_path))
+    assert seen == ["10.0.0.5", "[10.0.0.5]:2222"]
+
+
+def test_count_lines_unreadable_is_zero(tmp_path: Path) -> None:
+    assert services._count_lines(tmp_path / "absent") == 0
+
+
+def test_keygen_remove_without_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(UserError, match="ssh-keygen not found"):
+        services._keygen_remove(["x"], tmp_path / "known_hosts")
+
+
+def test_keygen_remove_skips_failing_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    kh = _known_hosts(tmp_path, ["a.example"])
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def boom(_argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        raise OSError("keygen broke")
+
+    monkeypatch.setattr(services, "run_sync", boom)
+    assert services._keygen_remove(["a.example"], kh) == 0  # failure skipped, nothing removed

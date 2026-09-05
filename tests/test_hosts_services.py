@@ -46,3 +46,17 @@ def test_list_statuses_fresh_cache_and_unknown(monkeypatch: pytest.MonkeyPatch) 
     got = services.list_statuses(refresh=False)
     assert got.checked_ago == 1.0
     assert [(h.alias, h.status) for h in got.hosts] == [("a", "available"), ("b", "unknown")]
+
+
+def test_list_statuses_refresh_remeasures_and_writes_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    written: dict[str, str] = {}
+    monkeypatch.setattr(services, "discover", lambda _timeout: [_host("a")])
+    monkeypatch.setattr(services, "get_settings", Settings)
+    monkeypatch.setattr(cache, "read", lambda _s: (999.0, {}))  # stale — must remeasure
+    monkeypatch.setattr(services, "measure", lambda _hosts, _s: {"a": "available"})
+    monkeypatch.setattr(cache, "write", lambda statuses, _s: written.update(statuses))
+
+    got = services.list_statuses(refresh=True)
+    assert got.checked_ago == 0.0
+    assert [(h.alias, h.status) for h in got.hosts] == [("a", "available")]
+    assert written == {"a": "available"}  # the fresh measurement was cached

@@ -23,6 +23,10 @@ type Availability = Literal["available", "unavailable", "unknown"]
 # sudo mode in run/start.
 type SudoMode = Literal["auto", "true", "false"]
 
+# How a host behind a ProxyJump is probed: a shell script on the jump (needs bash and
+# `timeout` there), or an `ssh -W` channel through it (no jump shell, one ssh per host).
+type JumpProbe = Literal["script", "forward"]
+
 # Client hints shared by several tools; all four are set explicitly because the MCP
 # defaults (destructive and open_world — true) are almost always wrong. A tool with a
 # unique set describes it in its own module.

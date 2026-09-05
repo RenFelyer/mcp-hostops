@@ -16,6 +16,7 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from ..schemas import JumpProbe
 from .constants import APP_NAME
 
 
@@ -45,6 +46,7 @@ class Settings(BaseSettings):
     ssh_g_timeout: float = 2.0  # parsing one host's config via `ssh -G`
     jump_timeout: float = 4.0  # ssh to the jump host and probes behind it
     deep_timeout: float = 6.0  # a real login via `ssh ... true`
+    jump_probe: JumpProbe = "script"  # "forward" — probe behind a jump via `ssh -W`, without a shell on it
 
     # ── command execution ───────────────────────────────────────────────────────
     run_timeout: float = 60.0  # default `run` timeout when the call doesn't set its own

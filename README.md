@@ -47,8 +47,10 @@ uv run mcp-hostops # сервер по stdio
 | `llms_list_sources`, `llms_add_source`, `llms_remove_source` | Реестр источников `llms.txt` с проверкой, что они живы |
 | `llms_index`, `llms_search`, `llms_fetch` | Оглавление, поиск по оглавлению или `llms-full.txt`, страница кусками |
 
-Хосты за `ProxyJump` проверяются изнутри jump-хоста (на нём нужны `bash` и
-`timeout`). `add_host` пишет канонический Host-блок в `~/.ssh/config.d/mcp.conf`
+Хосты за `ProxyJump` по умолчанию проверяются скриптом изнутри jump-хоста (на
+нём нужны `bash` и `timeout`); `HOSTOPS_MCP_JUMP_PROBE=forward` переключает на
+пробу через `ssh -W` — канал сквозь jump без шелла на нём, но по одному ssh на
+хост. `add_host` пишет канонический Host-блок в `~/.ssh/config.d/mcp.conf`
 и один раз подключает его к основному конфигу `Include`-директивой; ручной
 `~/.ssh/config` не переписывается. `copy_id` требует установленных `ssh-copy-id`
 и `sshpass`. Задачи живут в пределах сессии сервера. Инструменты `llms_*`
@@ -77,6 +79,7 @@ uv run mcp-hostops # сервер по stdio
 | Переменная | Смысл |
 |---|---|
 | `CONNECT_TIMEOUT`, `SSH_G_TIMEOUT`, `JUMP_TIMEOUT`, `DEEP_TIMEOUT` | Таймауты проб, секунды |
+| `JUMP_PROBE` | Проба за jump: `script` (по умолчанию, bash на jump) или `forward` (`ssh -W`) |
 | `RUN_TIMEOUT`, `MAX_COMMAND_TIMEOUT` | Таймаут `run` по умолчанию и его потолок |
 | `MAX_WAIT`, `JOB_HISTORY` | Потолок ожидания в `get_job`; сколько завершённых задач помнить |
 | `OUTPUT_LIMIT`, `CONTROL_PERSIST` | Потолок вывода в байтах; жизнь мастер-соединения |

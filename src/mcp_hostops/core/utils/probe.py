@@ -82,14 +82,22 @@ def _probe_via(jump: Host, group: list[Host], s: Settings) -> Statuses:
     An unreachable jump means everything behind it is unreachable — that's a
     conclusion, not a guess. A TCP probe of the jump itself is possible only
     if it's direct: behind its own jump host, its port isn't visible from
-    here, and the ssh call decides instead.
+    here, and the ssh call decides instead. How the group is probed then is
+    `jump_probe`: a shell script on the jump, or an `ssh -W` channel through it.
     """
-    down: Statuses = dict.fromkeys((h.alias for h in group), "unavailable")
     # ssh to the jump host itself is affected by overlay laziness the same way,
     # but has no retry of its own: a cold path would drag the whole group
     # behind it into unavailable.
     if not jump.proxyjump and not _reachable(jump, s.connect_timeout):
-        return down
+        return dict.fromkeys((h.alias for h in group), "unavailable")
+    if s.jump_probe == "forward":
+        return _probe_via_forward(jump, group, s)
+    return _probe_via_script(jump, group, s)
+
+
+def _probe_via_script(jump: Host, group: list[Host], s: Settings) -> Statuses:
+    """One ssh call runs a shell script on the jump that checks each port (needs bash there)."""
+    down: Statuses = dict.fromkeys((h.alias for h in group), "unavailable")
     try:
         done = run_sync([*ssh_argv(jump, s), _jump_script(group)], s.jump_timeout)
     except (OSError, subprocess.SubprocessError):
@@ -103,6 +111,36 @@ def _probe_via(jump: Host, group: list[Host], s: Settings) -> Statuses:
         # The script is ours and prints a line for every alias; nothing else
         # should happen, but we must not guess a status from garbage.
         return dict.fromkeys((h.alias for h in group), "unknown")
+
+
+def _forward_reachable(jump: Host, host: Host, s: Settings) -> bool:
+    """Whether host:port answers through the jump, probed with `ssh -W` (no shell on the jump).
+
+    Availability is read from how ssh ends. A refused or failed channel exits
+    non-zero ("open failed"); an opened channel either closes cleanly (exit 0)
+    or stays open until the budget and is killed (a timeout). `ConnectTimeout`
+    bounds the jump-connect phase, so a timeout here means the channel opened,
+    not that the jump was slow.
+    """
+    argv = ssh_argv(jump, s, forward=f"{host.hostname}:{host.port}")
+    try:
+        done = run_sync(argv, s.jump_timeout)
+    except subprocess.TimeoutExpired:
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _probe_via_forward(jump: Host, group: list[Host], s: Settings) -> Statuses:
+    """One `ssh -W` channel per host in the group; probes run in parallel.
+
+    No shell is needed on the jump, at the cost of one ssh per host instead of
+    a single batched call. Nested `fan_out` may exceed the worker cap when many
+    jumps are probed at once — acceptable for this opt-in mode.
+    """
+    reachable = fan_out(lambda host: _forward_reachable(jump, host, s), group)
+    return {host.alias: "available" if ok else "unavailable" for host, ok in zip(group, reachable, strict=True)}
 
 
 def measure(hosts: list[Host], s: Settings) -> Statuses:

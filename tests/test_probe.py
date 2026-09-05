@@ -200,3 +200,62 @@ def test_deep_check_nonzero_without_stderr(monkeypatch: pytest.MonkeyPatch, tmp_
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(probe, "run_sync", lambda _argv, _t: _completed(7))
     assert probe.deep_check(_direct(), Settings()) == (False, "exit code 7")
+
+
+# ── jump probe: ssh -W variant ────────────────────────────────────────────────────
+
+
+def test_forward_reachable_open_on_clean_exit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(probe, "run_sync", lambda _argv, _t: _completed(0))
+    jump = _host("10.0.0.1", alias="j", proxyjump="")
+    assert probe._forward_reachable(jump, _host("10.0.0.5", alias="in"), Settings()) is True
+
+
+def test_forward_reachable_open_on_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # A channel that stayed open until the budget is a reachable port, not a failure.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+    def boom(_argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd="ssh", timeout=timeout)
+
+    monkeypatch.setattr(probe, "run_sync", boom)
+    jump = _host("10.0.0.1", alias="j", proxyjump="")
+    assert probe._forward_reachable(jump, _host("10.0.0.5", alias="in"), Settings()) is True
+
+
+def test_forward_reachable_refused_on_nonzero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(probe, "run_sync", lambda _argv, _t: _completed(255, err="open failed"))
+    jump = _host("10.0.0.1", alias="j", proxyjump="")
+    assert probe._forward_reachable(jump, _host("10.0.0.5", alias="in"), Settings()) is False
+
+
+def test_forward_reachable_ssh_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+    def boom(_argv: list[str], _t: float) -> subprocess.CompletedProcess[str]:
+        raise OSError("no ssh")
+
+    monkeypatch.setattr(probe, "run_sync", boom)
+    jump = _host("10.0.0.1", alias="j", proxyjump="")
+    assert probe._forward_reachable(jump, _host("10.0.0.5", alias="in"), Settings()) is False
+
+
+def test_probe_via_forward_dispatches_and_builds_channel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(probe, "_reachable", lambda _h, _t: True)  # jump reachable
+    seen: list[list[str]] = []
+
+    def fake_ssh(argv: list[str], _t: float) -> subprocess.CompletedProcess[str]:
+        seen.append(argv)
+        target = argv[argv.index("-W") + 1]
+        return _completed(0 if target == "10.0.0.5:22" else 1)  # only 'in' is reachable
+
+    monkeypatch.setattr(probe, "run_sync", fake_ssh)
+    jump = _host("10.0.0.1", alias="j", proxyjump="")
+    group = [_host("10.0.0.5", alias="in", proxyjump="j"), _host("10.0.0.9", alias="in2", proxyjump="j")]
+    got = probe._probe_via(jump, group, Settings(jump_probe="forward"))
+    assert got == {"in": "available", "in2": "unavailable"}
+    assert all("-W" in argv for argv in seen)  # every probe used a channel, no jump shell
+    assert all(argv[-1] == "j" for argv in seen)  # each goes through the jump alias

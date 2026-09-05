@@ -55,10 +55,13 @@ def control_args(s: Settings) -> list[str]:
     return [arg for option in options for arg in ("-o", option)]
 
 
-def ssh_argv(host: Host, s: Settings, *, tty: bool = False) -> list[str]:
-    """Base ssh invocation with ControlMaster, without a command; `tty` adds `-tt`.
+def ssh_argv(host: Host, s: Settings, *, tty: bool = False, forward: str | None = None) -> list[str]:
+    """Base ssh invocation with ControlMaster, without a command.
 
-    `--` before the alias: a config name starting with `-` won't become an option.
+    `tty` adds `-tt`; `forward` (a `host:port`) adds `-W` to open a channel to
+    that address through this host instead of running a command — used to probe
+    a target behind a jump. `--` before the alias: a config name starting with
+    `-` won't become an option.
     """
     argv = [
         "ssh",
@@ -70,6 +73,8 @@ def ssh_argv(host: Host, s: Settings, *, tty: bool = False) -> list[str]:
     ]
     if tty:
         argv.append("-tt")
+    if forward is not None:
+        argv += ["-W", forward]
     argv += ["--", host.alias]
     return argv
 

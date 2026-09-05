@@ -1,4 +1,4 @@
-"""Реестр задач: прирост вывода, потолок буфера, маскировка, история."""
+"""Job registry: incremental output, buffer cap, masking, history."""
 
 import anyio
 import pytest
@@ -25,18 +25,18 @@ def test_snapshot_returns_delta_and_swaps_buffer() -> None:
 
     async def scenario() -> tuple[str, str]:
         snap1 = await manager.snapshot("1", 0.0)
-        job.capture.stdout.feed(b"second")  # новый вывод после чтения
+        job.capture.stdout.feed(b"second")  # new output after the read
         snap2 = await manager.snapshot("1", 0.0)
         return snap1.stdout, snap2.stdout
 
     first, second = anyio.run(scenario)
     assert first == "first"
-    assert second == "second"  # только прирост, «first» не повторился и не потерялся
+    assert second == "second"  # only the delta, "first" was neither repeated nor lost
 
 
 def test_snapshot_unknown_job_is_user_error() -> None:
     manager = JobManager()
-    with pytest.raises(UserError, match="не найдена"):
+    with pytest.raises(UserError, match="not found"):
         anyio.run(manager.snapshot, "nope", 0.0)
     assert manager.kill("nope") is False
 
@@ -48,7 +48,7 @@ def test_history_keeps_recent_finished_only(monkeypatch: pytest.MonkeyPatch) -> 
         manager._jobs[job_id] = _job(job_id)
     manager._jobs["4"] = _job("4", status="running")
     manager._forget_old()
-    assert [ref.id for ref in manager.listing()] == ["2", "3", "4"]  # живая остаётся всегда
+    assert [ref.id for ref in manager.listing()] == ["2", "3", "4"]  # the live one always stays
 
 
 def test_output_limit_marks_truncation() -> None:
@@ -57,7 +57,7 @@ def test_output_limit_marks_truncation() -> None:
     out.feed(b"defg")
     assert out.take() == b"abcde"
     assert out.truncated is True
-    out.feed(b"xyz")  # после take лимит считается заново
+    out.feed(b"xyz")  # after take, the limit is counted afresh
     assert out.take() == b"xyz"
 
 

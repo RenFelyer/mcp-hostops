@@ -1,5 +1,5 @@
-"""Конфигурация сервера.
+"""Server configuration.
 
-`environment` — настройки из окружения (pydantic-settings), `constants` —
-неизменяемые параметры системы, `logger` — отладочный лог в файл.
+`environment` — settings from the environment (pydantic-settings), `constants` —
+immutable system parameters, `logger` — debug logging to a file.
 """

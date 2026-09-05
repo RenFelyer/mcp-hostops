@@ -1,10 +1,10 @@
-"""Низкоуровневые примитивы ssh, общие для роутеров команд и задач и для проб.
+"""Low-level ssh primitives shared by the commands and jobs routers and by probes.
 
-Соединения переиспользуются через ControlMaster (сокет в приватном каталоге
-runtime), для хостов из `pty_hosts` ssh идёт с `-tt`. Вход в хост
-неинтерактивный (`BatchMode=yes`) — аутентификация только по ключу; пароль на
-stdin — это пароль sudo, а не вход. Оболочка хоста считается POSIX-совместимой:
-удалённый скрипт использует `&&`, `read -r` и `printf`.
+Connections are reused via ControlMaster (a socket in the private runtime
+directory); for hosts in `pty_hosts`, ssh runs with `-tt`. Login is
+non-interactive (`BatchMode=yes`) — authentication is key-only; a password on
+stdin is a sudo password, not a login one. The host shell is assumed to be
+POSIX-compatible: the remote script uses `&&`, `read -r`, and `printf`.
 """
 
 import codecs
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 
 def run_sync(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-    """Локальный процесс без stdin с захватом вывода; ошибки запуска — наружу."""
+    """A local process with no stdin, capturing output; launch errors propagate."""
     return subprocess.run(
         argv,
         capture_output=True,
@@ -40,11 +40,12 @@ def run_sync(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str
 
 
 def control_args(s: Settings) -> list[str]:
-    """Опции ControlMaster для переиспользования соединения.
+    """ControlMaster options for connection reuse.
 
     Raises:
-        PermissionError: каталог сокетов чужой или открыт другим — в нём нельзя
-            держать сокет, через который уходят команды и пароль sudo.
+        PermissionError: the socket directory belongs to someone else or is
+            open to others — a socket that carries commands and the sudo
+            password cannot live there.
     """
     control_dir = private_dir(s.control_dir)
     options = [
@@ -56,9 +57,9 @@ def control_args(s: Settings) -> list[str]:
 
 
 def ssh_argv(host: Host, s: Settings, *, tty: bool = False) -> list[str]:
-    """Базовый вызов ssh с ControlMaster, без команды; `tty` добавляет `-tt`.
+    """Base ssh invocation with ControlMaster, without a command; `tty` adds `-tt`.
 
-    `--` перед алиасом: имя из конфига, начинающееся с `-`, не станет опцией.
+    `--` before the alias: a config name starting with `-` won't become an option.
     """
     argv = [
         "ssh",
@@ -75,7 +76,7 @@ def ssh_argv(host: Host, s: Settings, *, tty: bool = False) -> list[str]:
 
 
 def _quote_cwd(cwd: str) -> str:
-    """Экранировать cwd, оставив `~` и `~/` раскрываться оболочкой."""
+    """Escape cwd, letting `~` and `~/` be expanded by the shell."""
     if cwd == "~":
         return "~"
     if cwd.startswith("~/"):
@@ -84,7 +85,7 @@ def _quote_cwd(cwd: str) -> str:
 
 
 def remote_script(command: str, cwd: str, prime: bool) -> str:
-    """Скрипт для хоста: заход в cwd, при необходимости прайминг sudo, затем команда."""
+    """Script for the host: cd into cwd, prime sudo if needed, then the command."""
     parts = [f"cd -- {_quote_cwd(cwd)}"]
     if prime:
         parts.append(SUDO_PRIME)
@@ -93,7 +94,7 @@ def remote_script(command: str, cwd: str, prime: bool) -> str:
 
 
 def build_stdin(password: str | None, user_stdin: str | None) -> bytes:
-    """Полезная нагрузка stdin: пароль sudo первой строкой, затем пользовательский."""
+    """The stdin payload: sudo password as the first line, then the user's own."""
     payload = b""
     if password is not None:
         payload += (password + "\n").encode()
@@ -103,10 +104,10 @@ def build_stdin(password: str | None, user_stdin: str | None) -> bytes:
 
 
 class Invocation(BaseModel):
-    """Готовый к запуску вызов: argv, нагрузка stdin и пароль для маскировки.
+    """A ready-to-run invocation: argv, the stdin payload, and the password for masking.
 
-    stdin и пароль скрыты из `repr`: текст исключения или отладочная запись с
-    вызовом не должны показывать пароль sudo.
+    stdin and the password are hidden from `repr`: an exception's text or a
+    debug log entry with the invocation must not reveal the sudo password.
     """
 
     argv: list[str]
@@ -122,11 +123,12 @@ def prepare(
     user_stdin: str | None,
     s: Settings,
 ) -> Invocation:
-    """Собрать вызов команды на хосте.
+    """Build the command invocation for the host.
 
     Raises:
-        SudoError: пароль нужен, но файла нет или у него небезопасные права.
-        PermissionError: каталог сокетов ControlMaster чужой.
+        SudoError: a password is needed, but the file is missing or has unsafe
+            permissions.
+        PermissionError: the ControlMaster socket directory belongs to someone else.
     """
     prime = decide_prime(command, sudo_mode)
     password = read_secret(host.alias, s) if prime else None
@@ -138,12 +140,13 @@ def prepare(
 
 
 class Output:
-    """Буфер одного потока с потолком: лишнее отбрасывается, обрезка запоминается.
+    """A single stream's buffer with a cap: excess is dropped, truncation is remembered.
 
-    Декодер инкрементальный: символ UTF-8, разрезанный границей чтения, не
-    превращается в мусор, а доклеивается при следующем чтении. Когда есть что
-    маскировать, так же придерживается и неполная последняя строка: пароль,
-    разрезанный границей чтения на два куска, построчная маска не узнала бы.
+    The decoder is incremental: a UTF-8 character split by a read boundary
+    isn't turned into garbage but is glued back together on the next read.
+    When there's something to mask, an incomplete last line is likewise held
+    back: a password split into two chunks by a read boundary wouldn't be
+    recognized by the line-based mask.
     """
 
     def __init__(self, limit: int) -> None:
@@ -154,22 +157,22 @@ class Output:
         self._pending = ""
 
     def feed(self, chunk: bytes) -> None:
-        """Добавить кусок, не превышая потолка."""
+        """Append a chunk without exceeding the cap."""
         kept = chunk[: max(0, self.limit - len(self.data))]
         self.data += kept
         if len(kept) < len(chunk):
             self.truncated = True
 
     def take(self) -> bytes:
-        """Забрать накопленное и начать с пустого буфера (чтение по частям)."""
+        """Take what's accumulated and start over with an empty buffer (chunked reading)."""
         data, self.data = self.data, bytearray()
         return bytes(data)
 
     def text(self, password: str | None, *, final: bool) -> str:
-        """Забрать накопленное текстом с замаскированным паролем.
+        """Take what's accumulated as text with the password masked.
 
-        `final` — вывода больше не будет: недоклеенный хвост отдаётся как есть,
-        а неполный символ — с заменой.
+        `final` — there will be no more output: an unfinished tail is given as
+        is, and an incomplete character is replaced.
         """
         text = self._pending + self._decoder.decode(self.take(), final)
         self._pending = ""
@@ -180,7 +183,7 @@ class Output:
 
 
 class Capture:
-    """Оба потока процесса и пароль, который в них надо маскировать."""
+    """Both of a process's streams and the password that must be masked in them."""
 
     def __init__(self, limit: int, password: str | None) -> None:
         self.stdout = Output(limit)
@@ -188,7 +191,7 @@ class Capture:
         self.password = password
 
     def drained(self, *, final: bool = True) -> CapturedOutput:
-        """Забрать накопленное; буферы после этого пусты, флаги обрезки остаются."""
+        """Take what's accumulated; the buffers are empty afterward, truncation flags remain."""
         return CapturedOutput(
             stdout=self.stdout.text(self.password, final=final),
             stderr=self.stderr.text(self.password, final=final),
@@ -198,10 +201,11 @@ class Capture:
 
 
 async def _feed_stdin(proc: anyio.abc.Process, payload: bytes) -> None:
-    """Отправить нагрузку и закрыть stdin, чтобы читающая команда увидела EOF.
+    """Send the payload and close stdin so a reading command sees EOF.
 
-    Процесс вправе закрыть stdin раньше, чем мы дописали (или вовсе не дожить до
-    записи): это не ошибка вызова, а его результат — он виден по коду возврата.
+    The process may close stdin before we're done writing (or not survive to
+    the write at all): that's not an invocation error but its outcome — it
+    shows up in the exit code.
     """
     if proc.stdin is None:
         return
@@ -215,7 +219,7 @@ async def _feed_stdin(proc: anyio.abc.Process, payload: bytes) -> None:
 
 
 async def _drain(stream: anyio.abc.ByteReceiveStream | None, out: Output) -> None:
-    """Читать поток в `out` до конца; при отмене прочитанное остаётся в буфере."""
+    """Read the stream into `out` to the end; on cancellation, what was read stays in the buffer."""
     if stream is None:
         return
     async for chunk in stream:
@@ -224,26 +228,26 @@ async def _drain(stream: anyio.abc.ByteReceiveStream | None, out: Output) -> Non
 
 @contextlib.asynccontextmanager
 async def spawn(call: Invocation) -> AsyncGenerator[anyio.abc.Process]:
-    """Запустить ssh; на выходе живой процесс убивается, а не дожидается.
+    """Start ssh; on exit a still-running process is killed, not waited for.
 
-    Отмена извне (таймаут, снятие задачи, остановка сервера) не должна ждать
-    удалённую команду: закрытие процесса само его не убьёт.
+    External cancellation (timeout, job removal, server shutdown) must not
+    wait for the remote command: closing the process alone would not kill it.
     """
-    log.debug("запуск: %s", call.argv)
+    log.debug("launching: %s", call.argv)
     async with await anyio.open_process(call.argv) as proc:
         try:
             yield proc
         finally:
             if proc.returncode is None:
                 proc.kill()
-            log.debug("завершён с кодом %s", proc.returncode)
+            log.debug("finished with code %s", proc.returncode)
 
 
 async def execute(proc: anyio.abc.Process, call: Invocation, capture: Capture) -> int:
-    """Скормить stdin, вычитать оба потока до конца и вернуть код возврата.
+    """Feed stdin, drain both streams to the end, and return the exit code.
 
-    Вывод пишется по мере чтения, поэтому при отмене (таймаут, снятие) в буферах
-    остаётся всё, что успели получить.
+    Output is written as it's read, so on cancellation (timeout, removal) the
+    buffers retain everything received so far.
     """
     async with anyio.create_task_group() as tg:
         tg.start_soon(_feed_stdin, proc, call.stdin)

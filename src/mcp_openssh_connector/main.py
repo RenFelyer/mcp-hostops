@@ -1,4 +1,4 @@
-"""Точка входа: сервер по stdio. uvloop — если установлен (extra), иначе asyncio."""
+"""Entry point: server over stdio. uvloop if installed (extra), otherwise asyncio."""
 
 try:
     from uvloop import run as run_loop
@@ -10,6 +10,6 @@ from .core.server import mcp
 
 
 def main() -> None:
-    """Запустить сервер по stdio и работать до закрытия транспорта."""
+    """Run the server over stdio and serve until the transport closes."""
     logger.setup()
     run_loop(mcp.run_async(transport="stdio", show_banner=False))

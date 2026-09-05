@@ -1,4 +1,4 @@
-"""Схемы ответов роутера llms.txt."""
+"""Response schemas for the llms.txt router."""
 
 from typing import Literal
 
@@ -6,85 +6,85 @@ from pydantic import BaseModel, Field
 
 from ...core.schemas import Checked, KnownSource
 
-# Где искать: в оглавлении или во всей документации одним файлом.
+# Where to search: in the table of contents or in the whole documentation as one file.
 SearchScope = Literal["index", "full"]
 
-# Итог проверки источника: индекс отвечает текстом; не отвечает; HTML-заглушка.
+# Outcome of a source check: the index responds with text; doesn't respond; HTML stub.
 SourceState = Literal["ok", "unavailable", "stub"]
 
 
 class SourceVerdict(BaseModel):
-    """Итог проверки источника; в таком виде хранится в файле итогов."""
+    """Outcome of a source check; stored in this shape in the outcomes file."""
 
     state: SourceState
-    detail: str = Field(description="код ответа или причина; пусто при ok")
+    detail: str = Field(description="response code or reason; empty when ok")
 
 
 class SourceStatus(KnownSource, SourceVerdict):
-    """Источник с итогом последней проверки."""
+    """A source with the outcome of its last check."""
 
 
 class SourcesResult(Checked):
-    """Ответ `llms_sources`: проверенный реестр и известные имена вариантов."""
+    """Response of `llms_sources`: the checked registry and known variant names."""
 
     sources: list[SourceStatus]
-    variants: list[str] = Field(description="имена файлов, которые llms_index ищет на домене")
+    variants: list[str] = Field(description="file names that llms_index looks for on a domain")
 
 
 class IndexEntry(BaseModel):
-    """Ссылка из оглавления `llms.txt`."""
+    """A link from the `llms.txt` table of contents."""
 
     title: str
-    url: str = Field(description="абсолютный адрес; передавать в llms_fetch как есть")
+    url: str = Field(description="absolute address; pass to llms_fetch as-is")
     description: str
-    section: str = Field(description="заголовок раздела индекса; пусто вне разделов")
+    section: str = Field(description="index section heading; empty outside sections")
 
 
 class Variant(BaseModel):
-    """Файл, найденный рядом с индексом."""
+    """A file found next to the index."""
 
     name: str
-    size: int | None = Field(description="байт по Content-Length; null — сервер не сообщил")
+    size: int | None = Field(description="bytes per Content-Length; null when the server didn't report one")
 
 
 class LlmsIndex(BaseModel):
-    """Ответ `llms_index`: разобранное оглавление и что ещё лежит на домене."""
+    """Response of `llms_index`: the parsed table of contents plus what else lives on the domain."""
 
-    url: str = Field(description="адрес самого индекса")
+    url: str = Field(description="address of the index itself")
     title: str
     summary: str
     entries: list[IndexEntry]
-    full_url: str = Field(description="адрес `llms-full.txt`, если индекс его называет")
-    variants: list[Variant] = Field(default_factory=list, description="файлы, найденные рядом с индексом")
+    full_url: str = Field(description="address of `llms-full.txt`, if the index names it")
+    variants: list[Variant] = Field(default_factory=list, description="files found next to the index")
 
 
 class SearchHit(BaseModel):
-    """Одно совпадение `llms_search`."""
+    """One `llms_search` match."""
 
     domain: str
-    title: str = Field(description="запись индекса или заголовок раздела full-файла")
+    title: str = Field(description="index entry title or full-file section heading")
     url: str
-    text: str = Field(description="описание записи или фрагмент раздела")
-    truncated: bool = Field(description="фрагмент обрезан по потолку")
+    text: str = Field(description="entry description or section excerpt")
+    truncated: bool = Field(description="excerpt trimmed to the cap")
 
 
 class SearchResult(BaseModel):
-    """Ответ `llms_search`."""
+    """Response of `llms_search`."""
 
     query: str
     scope: SearchScope
-    searched: list[str] = Field(description="домены, по которым искали")
-    skipped: list[str] = Field(description="домены, пропущенные из-за ошибки, с причиной")
-    total: int = Field(description="совпадений всего; в hits — не больше потолка")
+    searched: list[str] = Field(description="domains that were searched")
+    skipped: list[str] = Field(description="domains skipped due to an error, with the reason")
+    total: int = Field(description="total matches; hits holds no more than the cap")
     hits: list[SearchHit]
 
 
 class Page(BaseModel):
-    """Ответ `llms_fetch`: кусок страницы с позиции offset."""
+    """Response of `llms_fetch`: a page chunk starting at offset."""
 
     url: str
     content_type: str
-    length: int = Field(description="символов на странице всего")
+    length: int = Field(description="total characters on the page")
     offset: int
     text: str
-    next_offset: int | None = Field(description="откуда читать дальше; null — конец")
+    next_offset: int | None = Field(description="where to read from next; null means the end")

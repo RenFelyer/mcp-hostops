@@ -1,4 +1,4 @@
-"""Схема ответа роутера команд."""
+"""Commands router response schema."""
 
 from pydantic import Field
 
@@ -6,9 +6,9 @@ from ...core.schemas import CapturedOutput
 
 
 class RunResult(CapturedOutput):
-    """Ответ `run`."""
+    """Response of `run`."""
 
-    exit_code: int | None = Field(description="код возврата; null — убито по таймауту")
-    duration: float = Field(description="длительность, секунды")
+    exit_code: int | None = Field(description="return code; null — killed by timeout")
+    duration: float = Field(description="duration, seconds")
     timed_out: bool
-    sudo_used: bool = Field(description="был ли прайминг пароля sudo")
+    sudo_used: bool = Field(description="whether the sudo password was primed")

@@ -1,7 +1,7 @@
-"""Кэш статусов доступности хостов: JSON с отметкой времени в runtime-каталоге.
+"""Cache of host availability statuses: a timestamped JSON file in the runtime directory.
 
-Кэш — это оптимизация: при любой ошибке ввода-вывода или мусоре в файле сервер
-просто мерит заново.
+The cache is an optimization: on any I/O error or garbage in the file, the server
+simply measures again.
 """
 
 import contextlib
@@ -17,11 +17,11 @@ _HOSTS = TypeAdapter(dict[str, Availability])
 
 
 def read(s: Settings) -> tuple[float, dict[str, Availability]]:
-    """Прочитать кэш.
+    """Read the cache.
 
     Returns:
-        Возраст записи в секундах и статусы по алиасам. Возраст `inf` и пустые
-        статусы — кэша нет, он битый или в нём чужое значение статуса.
+        The record's age in seconds and statuses by alias. Age `inf` and empty statuses
+        mean there's no cache, it's corrupt, or it holds an unrecognized status value.
     """
     age, data = store.load_stamped(s.cache_file)
     try:
@@ -31,6 +31,6 @@ def read(s: Settings) -> tuple[float, dict[str, Availability]]:
 
 
 def write(statuses: Mapping[str, Availability], s: Settings) -> None:
-    """Записать статусы; ошибка ввода-вывода молча глотается."""
+    """Write statuses; an I/O error is silently swallowed."""
     with contextlib.suppress(OSError):
         store.save_stamped(s.cache_file, {"hosts": dict(statuses)})

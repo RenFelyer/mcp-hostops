@@ -1,41 +1,36 @@
-"""Общие для всех роутеров типы и вокабуляры.
+"""Types and vocabularies shared across all routers.
 
-Здесь живут значения, которые встречаются больше чем в одном роутере или общи для
-роутера и инфраструктуры: хост, статус доступности, режим sudo, захваченный
-вывод команды, источник `llms.txt` (его встроенный реестр — в константах) и
-пресеты подсказок клиенту для инструментов.
+This is where values live that appear in more than one router, or that are shared
+between a router and the infrastructure: host, availability status, sudo mode, captured
+command output, the `llms.txt` source (its built-in registry lives in constants), and
+preset client hints for tools.
 """
 
-from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal
 
 from mcp_types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
-# Строковый параметр инструмента, для которого пустая строка — ошибка вызова.
+# A string tool parameter for which an empty string is a call error.
 NonEmptyStr = Annotated[str, Field(min_length=1)]
 
-# Значение из JSON-файла состояния. До конкретного типа его сужает pydantic
-# (`TypeAdapter`, модель) у того, кто читает; ручных `isinstance` нет.
-type Json = Mapping[str, Json] | Sequence[Json] | str | int | float | bool | None
-
-# Доступность хоста: значение статуса в ответах роутера hosts и в пробах.
+# Host availability: the status value in the hosts router's responses and in probes.
 Availability = Literal["available", "unavailable", "unknown"]
 
-# Режим sudo в run/start.
+# sudo mode in run/start.
 SudoMode = Literal["auto", "true", "false"]
 
-# Подсказки клиенту, общие для нескольких инструментов; все четыре выставлены
-# явно, потому что дефолты MCP (destructive и open_world — true) почти всегда
-# неверны. Инструмент с уникальным набором описывает его у себя.
+# Client hints shared by several tools; all four are set explicitly because the MCP
+# defaults (destructive and open_world — true) are almost always wrong. A tool with a
+# unique set describes it in its own module.
 READS_REMOTE = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
 READS_LOCAL = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
-# Произвольная команда на хосте: может менять и удалять что угодно.
+# An arbitrary command on the host: it can change and delete anything.
 RUNS_REMOTE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=True)
 
 
 class Host(BaseModel):
-    """Хост из ~/.ssh/config с параметрами глазами `ssh -G`."""
+    """A host from ~/.ssh/config with parameters as seen by `ssh -G`."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -43,11 +38,11 @@ class Host(BaseModel):
     hostname: str
     user: str
     port: int
-    proxyjump: str = Field(description="алиас jump-хоста; пусто, если прямой")
+    proxyjump: str = Field(description="jump host alias; empty if the connection is direct")
 
 
 class CapturedOutput(BaseModel):
-    """Вывод команды с отметками, что потолок буфера был превышен."""
+    """Command output with flags marking whether the buffer cap was exceeded."""
 
     stdout: str
     stderr: str
@@ -56,20 +51,20 @@ class CapturedOutput(BaseModel):
 
 
 class Checked(BaseModel):
-    """Ответ, чьи данные могли быть получены раньше этого вызова."""
+    """A response whose data may have been obtained before this call."""
 
-    checked_ago: float = Field(description="возраст данных, секунды; 0 — получены этим вызовом")
+    checked_ago: float = Field(description="data age in seconds; 0 means obtained by this call")
 
 
 class KnownSource(BaseModel):
-    """Источник `llms.txt`: где индекс и что он покрывает."""
+    """A `llms.txt` source: where the index is and what it covers."""
 
     model_config = ConfigDict(frozen=True)
 
-    domain: str = Field(description="как называть источник в llms_index/llms_search")
-    index: str = Field(description="адрес `llms.txt`")
+    domain: str = Field(description="how to name the source in llms_index/llms_search")
+    index: str = Field(description="the `llms.txt` address")
     covers: str
-    # Адрес llms-full.txt не храним — он выводится из index; размер по нему не
-    # угадать, а full бывает десятки МБ, потому размер оставляем как подсказку.
-    full_size: int | None = Field(default=None, description="размер llms-full.txt в байтах; null — full-файла нет")
-    default: bool = Field(default=False, description="встроенный; удалить нельзя")
+    # We don't store the llms-full.txt address — it's derived from index; its size can't be
+    # guessed from that, and full can be tens of MB, so we keep the size as a hint.
+    full_size: int | None = Field(default=None, description="llms-full.txt size in bytes; null means no full file")
+    default: bool = Field(default=False, description="built-in; cannot be removed")

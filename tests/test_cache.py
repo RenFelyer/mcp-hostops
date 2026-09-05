@@ -1,4 +1,4 @@
-"""Кэш статусов: чужое значение делает кэш недействительным целиком."""
+"""Status cache: an unrecognized value invalidates the whole cache."""
 
 import json
 from math import inf

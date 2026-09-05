@@ -1,4 +1,4 @@
-"""Сервис роутера команд: выполнение команды на хосте с таймаутом."""
+"""Commands router service: running a command on a host with a timeout."""
 
 import time
 
@@ -21,28 +21,28 @@ async def run_command(
     sudo_mode: SudoMode,
     user_stdin: str | None,
 ) -> RunResult:
-    """Выполнить команду на хосте и дождаться её; пароль sudo маскируется.
+    """Run a command on a host and wait for it; the sudo password is masked.
 
-    По таймауту убивается локальный ssh; удалённая команда без pty (хост не в
-    `pty_hosts`) SIGHUP не получит и может доработать сама.
+    On timeout the local ssh is killed; a remote command without a pty (host
+    not in `pty_hosts`) won't get SIGHUP and may keep running on its own.
 
     Args:
-        host: Алиас из конфига.
-        command: Команда для оболочки хоста.
-        cwd: Каталог выполнения.
-        timeout: Секунды; None — дефолт из настроек.
-        sudo_mode: Режим прайминга пароля sudo.
-        user_stdin: Текст на stdin команды после строки пароля.
+        host: Alias from the config.
+        command: Command for the host's shell.
+        cwd: Working directory.
+        timeout: Seconds; None — the default from settings.
+        sudo_mode: Sudo password priming mode.
+        user_stdin: Text for the command's stdin, after the password line.
 
     Raises:
-        UserError: алиаса нет в конфиге, пароль sudo недоступен или таймаут
-            больше `max_command_timeout`.
+        UserError: the alias is not in the config, the sudo password is
+            unavailable, or the timeout exceeds `max_command_timeout`.
     """
     s = get_settings()
     if timeout is None:
         timeout = s.run_timeout
     elif timeout > s.max_command_timeout:
-        raise UserError(f"таймаут {timeout} больше потолка {s.max_command_timeout} с; для долгого — start")
+        raise UserError(f"timeout {timeout} exceeds the cap of {s.max_command_timeout}s; use start for long-running")
     call = prepare(await require_host(host), command, cwd, sudo_mode, user_stdin, s)
     capture = Capture(s.output_limit, call.password)
     exit_code: int | None = None

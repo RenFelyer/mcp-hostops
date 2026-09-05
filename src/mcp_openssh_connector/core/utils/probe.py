@@ -1,12 +1,13 @@
-"""Доступность хостов: TCP-проба порта, а за jump-хостами — проба изнутри.
+"""Host availability: TCP port probing, and for jump hosts, probing from inside.
 
-Прямой хост проверяем TCP-коннектом к порту, а не полным входом. Хосты за
-ProxyJump прямого маршрута не имеют — их пробуем изнутри jump-хоста одним
-ssh-вызовом. Флаг deep добавляет реальный вход `ssh ... true`: он отвечает уже
-не на «порт открыт», а на «ключ принят, внутрь пускают».
+A direct host is checked with a TCP connect to its port, not a full login.
+Hosts behind a ProxyJump have no direct route — they're probed from inside the
+jump host with a single ssh call. The deep flag adds a real login (`ssh ...
+true`): it answers not "is the port open" but "is the key accepted, are we
+let in".
 
-Логика синхронная (socket и subprocess): сервер вызывает её через поток, чтобы
-не блокировать цикл событий.
+The logic is synchronous (socket and subprocess): the server calls it through
+a thread so as not to block the event loop.
 """
 
 import logging
@@ -30,15 +31,15 @@ from .ssh import run_sync, ssh_argv
 log = logging.getLogger(__name__)
 
 Statuses = dict[str, Availability]
-_REPORT = TypeAdapter(Statuses)  # вывод jump-скрипта: «алиас статус» по строке
+_REPORT = TypeAdapter(Statuses)  # jump script output: "alias status" per line
 
 
 def _reachable(host: Host, connect_timeout: float) -> bool:
-    """Открыт ли порт: TCP-коннект, а не полный вход с аутентификацией.
+    """Whether the port is open: a TCP connect, not a full authenticated login.
 
-    Ошибку маршрутизации перепроверяем до `PROBE_PATH_BUDGET` — на оверлее она
-    значит лишь «путь ещё не поднят». Отказ и таймаут перепроверять нечего: это
-    ответ.
+    A routing error is retried up to `PROBE_PATH_BUDGET` — on an overlay it
+    only means "the path isn't up yet". A refusal or timeout isn't retried:
+    that's the answer.
     """
     deadline = time() + PROBE_PATH_BUDGET
     while True:
@@ -52,11 +53,11 @@ def _reachable(host: Host, connect_timeout: float) -> bool:
 
 
 def _jump_script(group: list[Host]) -> str:
-    """Скрипт проверки портов группы на jump-хосте (нужны bash и `timeout`).
+    """Script that checks a group's ports on the jump host (needs bash and `timeout`).
 
-    Печатает по строке «алиас статус» словами из `Availability`. hostname, port
-    и alias экранируются `shlex.quote`: значения из конфига не должны
-    подставляться в удалённый bash как код.
+    Prints one "alias status" line per host, using words from `Availability`.
+    hostname, port, and alias are escaped with `shlex.quote`: config values
+    must not be substituted into the remote bash as code.
     """
     checks = []
     for h in group:
@@ -76,15 +77,17 @@ def _probe_direct(host: Host, s: Settings) -> Statuses:
 
 
 def _probe_via(jump: Host, group: list[Host], s: Settings) -> Statuses:
-    """Группа за одним jump-хостом: прямого маршрута нет, пробуем изнутри его сети.
+    """A group behind one jump host: no direct route, so probe from inside its network.
 
-    Недоступный jump означает недоступность всего за ним — это вывод, а не догадка.
-    TCP-проба самого jump возможна, только если он прямой: за своим jump-хостом
-    его порт отсюда не виден, и решает уже ssh-вызов.
+    An unreachable jump means everything behind it is unreachable — that's a
+    conclusion, not a guess. A TCP probe of the jump itself is possible only
+    if it's direct: behind its own jump host, its port isn't visible from
+    here, and the ssh call decides instead.
     """
     down: Statuses = dict.fromkeys((h.alias for h in group), "unavailable")
-    # ssh к самому jump-хосту ленивость оверлея задевает так же, но повтора внутри
-    # себя не имеет: холодный путь утащил бы в unavailable всю группу за ним.
+    # ssh to the jump host itself is affected by overlay laziness the same way,
+    # but has no retry of its own: a cold path would drag the whole group
+    # behind it into unavailable.
     if not jump.proxyjump and not _reachable(jump, s.connect_timeout):
         return down
     try:
@@ -97,16 +100,16 @@ def _probe_via(jump: Host, group: list[Host], s: Settings) -> Statuses:
     try:
         return _REPORT.validate_python({h.alias: seen.get(h.alias) for h in group})
     except ValidationError:
-        # Скрипт наш и печатает строку на каждый алиас; иного не бывает, но
-        # догадываться о статусе по мусору нельзя.
+        # The script is ours and prints a line for every alias; nothing else
+        # should happen, but we must not guess a status from garbage.
         return dict.fromkeys((h.alias for h in group), "unknown")
 
 
 def measure(hosts: list[Host], s: Settings) -> Statuses:
-    """Все пробы разом; время ограничено таймаутами самих проб.
+    """All probes at once; time is bounded by the probes' own timeouts.
 
     Returns:
-        Статус по каждому алиасу из `hosts`.
+        Status for each alias in `hosts`.
     """
     known = {h.alias: h for h in hosts}
     behind: dict[str, list[Host]] = defaultdict(list)
@@ -116,8 +119,9 @@ def measure(hosts: list[Host], s: Settings) -> Statuses:
 
     statuses: Statuses = {}
     probes: list[Callable[[], Statuses]] = [partial(_probe_direct, h, s) for h in hosts if not h.proxyjump]
-    # jump обычно и сам описан в конфиге — тогда он уже разобран, второй `ssh -G`
-    # не нужен. Нераспознанный jump делает всю группу за ним недоступной.
+    # The jump is usually described in the config itself — then it's already
+    # resolved and a second `ssh -G` isn't needed. An unresolved jump makes
+    # the whole group behind it unavailable.
     for alias, group in behind.items():
         via = known.get(alias) or resolve(alias, s.ssh_g_timeout)
         if via is None:
@@ -127,23 +131,23 @@ def measure(hosts: list[Host], s: Settings) -> Statuses:
 
     for result in fan_out(lambda probe: probe(), probes):
         statuses |= result
-    log.debug("пробы: %s", statuses)
+    log.debug("probes: %s", statuses)
     return statuses
 
 
 def deep_check(host: Host, s: Settings) -> tuple[bool, str]:
-    """Реальный вход `ssh ... true`.
+    """A real login: `ssh ... true`.
 
     Returns:
-        Пара «пустили ли» и короткая причина отказа; при успехе причина пустая.
+        A pair of "was access granted" and a short failure reason; empty on success.
     """
     try:
         done = run_sync([*ssh_argv(host, s), "true"], s.deep_timeout)
     except subprocess.TimeoutExpired:
-        return False, "таймаут входа"
+        return False, "login timed out"
     except OSError as err:
-        return False, f"ssh не запустился: {err}"
+        return False, f"ssh failed to start: {err}"
     if done.returncode == 0:
         return True, ""
     reason = done.stderr.strip().splitlines()
-    return False, reason[-1] if reason else f"код возврата {done.returncode}"
+    return False, reason[-1] if reason else f"exit code {done.returncode}"

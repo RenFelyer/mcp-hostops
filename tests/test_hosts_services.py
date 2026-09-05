@@ -1,4 +1,4 @@
-"""Оркестрация статусов: deep обходится без TCP-проб, чужой алиас — unknown."""
+"""Status orchestration: deep skips TCP probes, an unknown alias is unknown."""
 
 import pytest
 
@@ -15,14 +15,14 @@ def _host(alias: str) -> Host:
 def test_check_statuses_deep_skips_tcp_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     hosts = {"a": _host("a"), "b": _host("b")}
     monkeypatch.setattr(services, "resolve_known", lambda _aliases, _timeout: hosts)
-    monkeypatch.setattr(services, "measure", lambda *_: pytest.fail("TCP-проба при deep не нужна"))
-    monkeypatch.setattr(services, "deep_check", lambda h, _s: (h.alias == "a", "" if h.alias == "a" else "отказ"))
+    monkeypatch.setattr(services, "measure", lambda *_: pytest.fail("TCP probe not needed for deep"))
+    monkeypatch.setattr(services, "deep_check", lambda h, _s: (h.alias == "a", "" if h.alias == "a" else "refused"))
 
     got = services.check_statuses(["a", "b", "nope"], deep=True)
     assert [(r.alias, r.status, r.detail) for r in got] == [
         ("a", "available", ""),
-        ("b", "unavailable", "отказ"),
-        ("nope", "unknown", "нет в ~/.ssh/config"),
+        ("b", "unavailable", "refused"),
+        ("nope", "unknown", "not in ~/.ssh/config"),
     ]
 
 
@@ -30,7 +30,7 @@ def test_check_statuses_shallow_uses_measure(monkeypatch: pytest.MonkeyPatch) ->
     hosts = {"a": _host("a")}
     monkeypatch.setattr(services, "resolve_known", lambda _aliases, _timeout: hosts)
     monkeypatch.setattr(services, "measure", lambda _hosts, _s: {"a": "available"})
-    monkeypatch.setattr(services, "deep_check", lambda *_: pytest.fail("вход без deep не нужен"))
+    monkeypatch.setattr(services, "deep_check", lambda *_: pytest.fail("login not needed without deep"))
 
     got = services.check_statuses(["a"], deep=False)
     assert [(r.alias, r.status) for r in got] == [("a", "available")]
@@ -40,7 +40,7 @@ def test_list_statuses_fresh_cache_and_unknown(monkeypatch: pytest.MonkeyPatch) 
     hosts = [_host("a"), _host("b")]
     monkeypatch.setattr(services, "discover", lambda _timeout: hosts)
     monkeypatch.setattr(cache, "read", lambda _s: (1.0, {"a": "available"}))
-    monkeypatch.setattr(services, "measure", lambda *_: pytest.fail("свежий кэш — без проб"))
+    monkeypatch.setattr(services, "measure", lambda *_: pytest.fail("fresh cache — no probes"))
     monkeypatch.setattr(services, "get_settings", Settings)
 
     got = services.list_statuses(refresh=False)

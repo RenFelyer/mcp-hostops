@@ -1,1 +1,1 @@
-"""Роутеры: подпакет на группу инструментов, монтируются сервером автоматически."""
+"""Routers: one subpackage per tool group, mounted by the server automatically."""

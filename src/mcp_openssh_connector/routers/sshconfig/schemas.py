@@ -1,4 +1,4 @@
-"""Схемы роутера управления ~/.ssh/config."""
+"""Schemas of the ~/.ssh/config management router."""
 
 from pydantic import BaseModel, Field
 
@@ -6,45 +6,45 @@ from ...core.schemas import Host
 
 
 class ManagedHost(BaseModel):
-    """Желаемый Host-блок для managed-файла; из него собирается канонический текст."""
+    """Desired Host block for the managed file; the canonical text is built from it."""
 
     alias: str
     hostname: str
     user: str = ""
     port: int = 22
     identity_file: str = ""
-    proxy_jump: str = Field(default="", description="алиас jump-хоста")
-    extra: dict[str, str] = Field(default_factory=dict, description="прочие опции ssh, «Ключ Значение»")
+    proxy_jump: str = Field(default="", description="jump host alias")
+    extra: dict[str, str] = Field(default_factory=dict, description='other ssh options, "Key Value"')
 
 
 class AddHostResult(BaseModel):
-    """Ответ add_host: что записано и как хост теперь виден ssh."""
+    """Response of add_host: what was written and how ssh now sees the host."""
 
     alias: str
-    config_file: str = Field(description="managed-файл, куда записан Host-блок")
-    include_added: bool = Field(description="в основной конфиг добавлена строка Include на managed-файл")
-    host: Host | None = Field(description="хост глазами ssh -G после записи; null — ssh -G не разобрал")
+    config_file: str = Field(description="managed file the Host block was written to")
+    include_added: bool = Field(description="an Include line pointing at the managed file was added to the main config")
+    host: Host | None = Field(description="the host as seen by ssh -G after writing; null — ssh -G couldn't parse it")
 
 
 class RemoveHostResult(BaseModel):
-    """Ответ remove_host: что вычищено вместе с Host-блоком."""
+    """Response of remove_host: what was cleaned up along with the Host block."""
 
     alias: str
-    known_hosts_removed: int = Field(description="удалённых записей known_hosts")
-    secret_removed: bool = Field(description="удалён ли файл ~/.ssh/<alias>.secret")
+    known_hosts_removed: int = Field(description="known_hosts entries removed")
+    secret_removed: bool = Field(description="whether the ~/.ssh/<alias>.secret file was removed")
 
 
 class ForgetHostResult(BaseModel):
-    """Ответ forget_host: очистка known_hosts без правки config."""
+    """Response of forget_host: known_hosts cleanup without touching the config."""
 
-    target: str = Field(description="имя хоста, по которому чистили known_hosts")
+    target: str = Field(description="host name used to clean known_hosts")
     known_hosts_file: str
-    removed: int = Field(description="удалённых записей")
+    removed: int = Field(description="entries removed")
 
 
 class CopyIdResult(BaseModel):
-    """Ответ copy_id: установка публичного ключа на хост."""
+    """Response of copy_id: installing a public key on the host."""
 
     alias: str
-    ok: bool = Field(description="ключ установлен (код возврата 0)")
-    detail: str = Field(description="последняя строка вывода ssh-copy-id или причина отказа")
+    ok: bool = Field(description="the key was installed (return code 0)")
+    detail: str = Field(description="last line of ssh-copy-id output, or the reason for failure")

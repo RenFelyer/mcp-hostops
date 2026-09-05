@@ -1,10 +1,10 @@
-"""Отладочный лог в файл; в обычной работе выключен.
+"""Debug logging to a file; disabled during normal operation.
 
-Включается переменной `OPENSSH_MCP_DEBUG_LOG=<путь>`: тогда всё от уровня DEBUG,
-включая fastmcp, пишется в этот файл. Файл держится с правами 0600 — в записях
-бывают команды и имена хостов. Без переменной обработчики не добавляются, и
-сервер по stdio ничего лишнего не выводит. Пароль sudo в лог не попадает
-никогда: логируются argv и коды, но не stdin.
+Enabled by the `OPENSSH_MCP_DEBUG_LOG=<path>` variable: then everything from DEBUG level
+up, including fastmcp, is written to that file. The file is kept at mode 0600 — records
+sometimes contain commands and host names. Without the variable, no handlers are added,
+and the server over stdio outputs nothing extra. The sudo password never ends up in the
+log: argv and exit codes are logged, but not stdin.
 """
 
 import logging
@@ -17,13 +17,13 @@ _FILE_MODE = 0o600
 
 
 def setup() -> None:
-    """Подключить файл отладки, если он задан в настройках."""
+    """Attach the debug file handler if one is set in the settings."""
     path: Path | None = get_settings().debug_log
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(mode=_FILE_MODE)
-    path.chmod(_FILE_MODE)  # `touch` не трогает права существующего файла
+    path.chmod(_FILE_MODE)  # `touch` doesn't change the permissions of an existing file
     handler = logging.FileHandler(path, encoding="utf-8")
     handler.setFormatter(logging.Formatter(_FORMAT))
     root = logging.getLogger()

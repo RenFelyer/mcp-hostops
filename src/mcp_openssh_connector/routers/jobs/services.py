@@ -1,14 +1,14 @@
-"""Сервис роутера фоновых задач: реестр задач и их выполнение.
+"""Background jobs router service: job registry and their execution.
 
-Задача — живой ssh-процесс внутри сервера; вывод копится в буфере и отдаётся по
-запросу. Каждая задача — отдельный asyncio-таск (nursery через lifespan FastMCP
-держать нельзя: он закрывается в другой задаче). Задачи умирают вместе с
-сервером, то есть в пределах сессии. Пароль sudo уходит в stdin один раз в
-начале, потому что процесс не перезапускается.
+A job is a live ssh process inside the server; output accumulates in a buffer
+and is handed out on request. Each job is a separate asyncio task (a nursery
+can't be held through FastMCP's lifespan: it closes in a different task). Jobs
+die together with the server, i.e. within the session. The sudo password goes
+to stdin once at the start, because the process is never restarted.
 
-Менеджер один на сервер (`manager`); lifespan роутера снимает его задачи при
-остановке. Завершённых задач помнится не больше `job_history`: старые
-забываются вместе с непрочитанным выводом.
+There is one manager per server (`manager`); the router's lifespan cancels its
+jobs on shutdown. No more than `job_history` finished jobs are remembered: the
+older ones are forgotten together with their unread output.
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from .schemas import JobRef, JobSnapshot
 
 
 class Job:
-    """Живая фоновая задача: публичное состояние плюс буферы, таск и событие конца."""
+    """A live background job: public state plus buffers, task and completion event."""
 
     def __init__(self, ref: JobRef, capture: Capture) -> None:
         self.ref = ref
@@ -35,7 +35,7 @@ class Job:
 
 
 class JobManager:
-    """Реестр фоновых задач: каждая — самостоятельный asyncio-таск."""
+    """Registry of background jobs: each one an independent asyncio task."""
 
     def __init__(self) -> None:
         self._jobs: dict[str, Job] = {}
@@ -46,10 +46,10 @@ class JobManager:
         return get_settings()
 
     async def start(self, host: str, command: str, cwd: str, sudo_mode: SudoMode) -> JobRef:
-        """Запустить команду в фоне и сразу вернуть задачу с присвоенным id.
+        """Start a command in the background and return the job with its assigned id right away.
 
         Raises:
-            UserError: алиаса нет в конфиге или пароль sudo недоступен.
+            UserError: the alias is not in the config or the sudo password is unavailable.
         """
         call = prepare(await require_host(host), command, cwd, sudo_mode, None, self._s)
         self._forget_old()
@@ -64,7 +64,7 @@ class JobManager:
         return job.ref
 
     def _forget_old(self) -> None:
-        """Оставить не больше `job_history` завершённых задач, самых свежих."""
+        """Keep no more than `job_history` finished jobs, the most recent ones."""
         finished = [job_id for job_id, job in self._jobs.items() if job.ref.status != "running"]
         for job_id in finished[: max(0, len(finished) - self._s.job_history)]:
             del self._jobs[job_id]
@@ -76,10 +76,10 @@ class JobManager:
 
     @staticmethod
     def _finish(job: Job, task: asyncio.Task[None]) -> None:
-        """Перенести итог таска в задачу.
+        """Carry the task's outcome over to the job.
 
-        Callback, а не код в `_run`: таск, отменённый до первого шага, тело
-        `_run` не исполняет вовсе.
+        A callback rather than code in `_run`: a task cancelled before its
+        first step never executes the body of `_run` at all.
         """
         if task.cancelled():
             job.ref.status = "killed"
@@ -93,19 +93,19 @@ class JobManager:
     def _get(self, job_id: str) -> Job:
         job = self._jobs.get(job_id)
         if job is None:
-            raise UserError(f"задача {job_id!r} не найдена")
+            raise UserError(f"job {job_id!r} not found")
         return job
 
     async def snapshot(self, job_id: str, wait: float) -> JobSnapshot:
-        """Слепок задачи с приростом вывода с прошлого чтения.
+        """A snapshot of the job with the incremental output since the last read.
 
         Args:
-            job_id: Идентификатор из `start`.
-            wait: Секунды ожидания завершения; 0 — не ждать. Сверху ограничено
+            job_id: Identifier from `start`.
+            wait: Seconds to wait for completion; 0 — don't wait. Capped at
                 `max_wait`.
 
         Raises:
-            UserError: такой задачи нет.
+            UserError: no such job.
         """
         job = self._get(job_id)
         if wait > 0 and job.ref.status == "running":
@@ -115,11 +115,11 @@ class JobManager:
         return JobSnapshot(**job.ref.model_dump(), **output.model_dump())
 
     def kill(self, job_id: str) -> bool:
-        """Снять задачу.
+        """Kill a job.
 
         Returns:
-            True — была запущена и получила отмену; False — нет такой или уже
-            завершилась.
+            True — it was running and got cancelled; False — no such job, or
+            it already finished.
         """
         job = self._jobs.get(job_id)
         if job is None or job.task is None or job.ref.status != "running":
@@ -128,11 +128,11 @@ class JobManager:
         return True
 
     def listing(self) -> list[JobRef]:
-        """Все задачи без вывода: только состояния (для обзора)."""
+        """All jobs without output: statuses only (for an overview)."""
         return [job.ref for job in self._jobs.values()]
 
     async def shutdown(self) -> None:
-        """Снять все живые задачи и дождаться их завершения — при остановке сервера."""
+        """Cancel all live jobs and wait for them to finish — on server shutdown."""
         tasks = [job.task for job in self._jobs.values() if job.task is not None]
         for task in tasks:
             task.cancel()

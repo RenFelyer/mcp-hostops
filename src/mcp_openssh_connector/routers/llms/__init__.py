@@ -1,4 +1,4 @@
-"""Роутер llms.txt: индекс документации на домене инструмента, поиск, страницы."""
+"""llms.txt router: tool documentation index on the tool's domain, search, pages."""
 
 from .handlers import router
 

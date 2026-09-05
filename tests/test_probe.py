@@ -1,4 +1,4 @@
-"""Пробы: jump-скрипт без инъекций, хост за цепочкой jump-хостов."""
+"""Probes: jump script without injection, a host behind a chain of jump hosts."""
 
 import subprocess
 from pathlib import Path
@@ -18,26 +18,27 @@ def _host(hostname: str, alias: str = "x", proxyjump: str = "j") -> Host:
 def test_jump_script_no_injection(tmp_path: Path) -> None:
     marker = tmp_path / "PWNED"
     script = _jump_script([_host(f"1.2.3.4; touch {marker}")])
-    # Выполняем сгенерированный скрипт локально: /dev/tcp к мусорному «хосту»
-    # провалится, а инъекция `touch` не должна сработать — hostname экранирован.
+    # Run the generated script locally: /dev/tcp to the garbage "host" will
+    # fail, and the `touch` injection must not fire — hostname is escaped.
     subprocess.run(["bash", "-c", script], capture_output=True, timeout=10, check=False)
     assert not marker.exists()
 
 
 def test_jump_script_echo_parseable() -> None:
-    # Для нормального алиаса вывод «alias status» разбирается по первому пробелу.
+    # For a normal alias, the "alias status" output is split on the first space.
     script = _jump_script([_host("10.0.0.1", alias="ok")])
     assert "echo ok available" in script
     assert "echo ok unavailable" in script
 
 
 def test_probe_via_chained_jump_skips_tcp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # Jump-хост сам за своим jump: его порт отсюда не виден, TCP-проба
-    # утащила бы всю группу в unavailable; решать должен ssh-вызов.
+    # The jump host is itself behind its own jump: its port isn't visible from
+    # here, a TCP probe would drag the whole group into unavailable; the ssh
+    # call must decide instead.
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
 
     def no_tcp(_host: Host, _timeout: float) -> bool:
-        pytest.fail("TCP-проба за jump недопустима")
+        pytest.fail("a TCP probe behind a jump is not allowed")
 
     def fake_ssh(_argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], 0, stdout="inner available\n", stderr="")
@@ -50,7 +51,7 @@ def test_probe_via_chained_jump_skips_tcp(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 def test_probe_via_garbage_output_is_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # Вывод скрипта не в словаре статусов — не гадать, а сказать «неизвестно».
+    # Script output not in the status dict — don't guess, say "unknown".
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(probe, "_reachable", lambda _host, _timeout: True)
 

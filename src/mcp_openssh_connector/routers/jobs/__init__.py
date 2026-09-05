@@ -1,4 +1,4 @@
-"""Роутер фоновых задач: долгие команды со стримингом вывода."""
+"""Background jobs router: long-running commands with output streaming."""
 
 from .handlers import router
 

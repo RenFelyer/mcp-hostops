@@ -1,4 +1,4 @@
-"""Роутер хостов: статус и параметры хостов из ~/.ssh/config."""
+"""Hosts router: host status and parameters from ~/.ssh/config."""
 
 from .handlers import router
 

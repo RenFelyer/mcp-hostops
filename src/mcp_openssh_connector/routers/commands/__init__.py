@@ -1,4 +1,4 @@
-"""Роутер команд: выполнение команд на хосте по ssh."""
+"""Commands router: running commands on a host over ssh."""
 
 from .handlers import router
 

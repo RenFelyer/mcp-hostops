@@ -1,4 +1,4 @@
-"""Роутер llms.txt: реестр, разбор индекса, поиск, кэш и проверка домена — без сети."""
+"""llms.txt router: registry, index parsing, search, cache and domain validation — no network."""
 
 import json
 from collections.abc import Awaitable, Callable, Iterator
@@ -18,40 +18,40 @@ from mcp_openssh_connector.routers.llms.services import Session
 
 INDEX = """# Ruff
 
-> Линтер и форматтер.
+> Linter and formatter.
 
-Вводная строка без ссылки.
+Intro line with no link.
 
-## Правила
+## Rules
 
-- [E501](https://docs.astral.sh/ruff/rules/line-too-long.md): длинные строки
-- [Настройка](/ruff/configuration.md): pyproject и ruff.toml
+- [E501](https://docs.astral.sh/ruff/rules/line-too-long.md): line too long
+- [Configuration](/ruff/configuration.md): pyproject and ruff.toml
 
-## Всё сразу
+## Everything at once
 
-- [Полностью](llms-full.txt)
+- [Full](llms-full.txt)
 """
 
 FULL = """# Ruff
 
-Вступление.
+Introduction.
 
-## Линтер
+## Linter
 
-Правила и их коды.
+Rules and their codes.
 
 ```bash
-# это комментарий в коде, а не заголовок
+# this is a comment in code, not a heading
 ruff check .
 ```
 
 ### E501
 
-Строка длиннее лимита.
+Line longer than the limit.
 
-## Форматтер
+## Formatter
 
-Стиль как у black.
+Style like black.
 """
 
 SockAddr = tuple[str, int] | tuple[str, int, int, int]
@@ -67,7 +67,7 @@ DEAD = KnownSource(domain="dead.example", index="https://dead.example/llms.txt",
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    """Кэш, данные и runtime-каталог — во временном месте; настройки заново."""
+    """Cache, data and runtime dirs in a temp location; settings rebuilt from scratch."""
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
@@ -77,7 +77,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
 
 
 def _serve(pages: dict[str, str], *, spa: bool = False) -> httpx2.MockTransport:
-    """Транспорт: известные пути — 200, остальное — 404 (или 200 при SPA)."""
+    """Transport: known paths return 200, everything else 404 (or 200 for an SPA)."""
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         path = request.url.path
@@ -93,7 +93,7 @@ def _serve(pages: dict[str, str], *, spa: bool = False) -> httpx2.MockTransport:
 
 
 def _use(transport: httpx2.MockTransport, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Подставить транспорт, сохранив хук проверки адреса; DNS не трогать."""
+    """Swap in the transport, keeping the address-check hook; don't touch DNS."""
 
     def make_client(_s: Settings, guard: Callable[[httpx2.Request], Awaitable[None]]) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=transport, follow_redirects=True, event_hooks={"request": [guard]})
@@ -117,12 +117,12 @@ def test_index_url_forms_and_registry() -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "http://docs.example/llms.txt",  # только https
+        "http://docs.example/llms.txt",  # https only
         "https://localhost/llms.txt",
         "https://127.0.0.1/llms.txt",
         "https://10.0.0.1/llms.txt",
         "https://[::1]/llms.txt",
-        "https://../llms.txt",  # хост, который выводит кэш за пределы каталога
+        "https://../llms.txt",  # a host that would push the cache outside its directory
         "file:///etc/passwd",
     ],
 )
@@ -144,7 +144,7 @@ def test_default_registry_consistent() -> None:
         assert k.index.startswith("https://")
         assert k.index.endswith("llms.txt")
         assert k.covers
-        assert k.full_size is None or k.full_size > 0  # размер, если задан, положителен
+        assert k.full_size is None or k.full_size > 0  # size, if set, is positive
     assert "llms.txt" in constants.LLMS_VARIANTS
     assert "llms-full.txt" in constants.LLMS_VARIANTS
 
@@ -152,19 +152,19 @@ def test_default_registry_consistent() -> None:
 def test_parse_index_sections_and_relative_urls() -> None:
     index = services.parse_index(INDEX, "https://docs.astral.sh/ruff/llms.txt")
     assert index.title == "Ruff"
-    assert index.summary == "Линтер и форматтер."
-    assert [e.title for e in index.entries] == ["E501", "Настройка", "Полностью"]
+    assert index.summary == "Linter and formatter."
+    assert [e.title for e in index.entries] == ["E501", "Configuration", "Full"]
     assert index.entries[1].url == "https://docs.astral.sh/ruff/configuration.md"
-    assert index.entries[1].section == "Правила"
-    assert index.entries[0].description == "длинные строки"
+    assert index.entries[1].section == "Rules"
+    assert index.entries[0].description == "line too long"
     assert index.full_url == "https://docs.astral.sh/ruff/llms-full.txt"
 
 
 def test_sections_split_by_headings_outside_fences() -> None:
     got = services.sections(FULL)
-    assert [h for h, _ in got] == ["Ruff", "Линтер", "E501", "Форматтер"]
+    assert [h for h, _ in got] == ["Ruff", "Linter", "E501", "Formatter"]
     assert got[2][1].startswith("### E501")
-    assert "комментарий в коде" in got[1][1]  # `# …` внутри ``` остался в разделе
+    assert "comment in code" in got[1][1]  # `# …` inside ``` stays in the section
 
 
 def test_index_search_fetch_end_to_end(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,12 +187,12 @@ def test_index_search_fetch_end_to_end(home: Path, monkeypatch: pytest.MonkeyPat
             ]
 
             by_index = await session.search("PYPROJECT", "docs.astral.sh/ruff", "index")
-            assert [h.title for h in by_index.hits] == ["Настройка"]
+            assert [h.title for h in by_index.hits] == ["Configuration"]
             assert by_index.hits[0].domain == "docs.astral.sh/ruff"
             assert by_index.searched == ["docs.astral.sh/ruff"]
 
-            by_full = await session.search("коды", "docs.astral.sh/ruff", "full")
-            assert [h.title for h in by_full.hits] == ["Линтер"]
+            by_full = await session.search("codes", "docs.astral.sh/ruff", "full")
+            assert [h.title for h in by_full.hits] == ["Linter"]
             assert by_full.hits[0].url.endswith("/ruff/llms-full.txt")
 
             with pytest.raises(UserError, match="scope=full"):
@@ -208,8 +208,8 @@ def test_index_search_fetch_end_to_end(home: Path, monkeypatch: pytest.MonkeyPat
             assert tail.next_offset is None
 
     anyio.run(scenario)
-    # В кэше индекс, full, страница и HEAD по каждому варианту; мусорной пробы
-    # нет — текстовые ответы в ней не нуждаются.
+    # The cache holds the index, full file, page and a HEAD for each variant;
+    # no junk probe — text responses don't need one.
     bodies = list((home / "cache" / "mcp-openssh-connector" / "llms").rglob("*.body"))
     assert len(bodies) == 3 + len(constants.LLMS_VARIANTS)
 
@@ -239,20 +239,20 @@ def test_verify_sources_cached_until_reboot_or_ttl(monkeypatch: pytest.MonkeyPat
         ("dead.example", "unavailable", "HTTP 404"),
     ]
     assert heads == 2
-    assert s.llms_status_file.is_file()  # runtime-каталог: до перезагрузки
+    assert s.llms_status_file.is_file()  # runtime dir: lives until reboot
 
     anyio.run(verify)
-    assert heads == 2  # из сохранённых итогов, без сети
+    assert heads == 2  # from saved outcomes, no network
 
     anyio.run(lambda: verify(refresh=True))
     assert heads == 4
 
     monkeypatch.setattr(s, "llms_status_ttl", 0.0)
     anyio.run(verify)
-    assert heads == 6  # протухло
+    assert heads == 6  # stale
 
-    # Битые сохранённые итоги — перепроверка, а не падение.
-    s.llms_status_file.write_text(json.dumps({"checked_at": 9e12, "sources": {"docs.astral.sh/ruff": "мусор"}}))
+    # Corrupt saved outcomes trigger a re-check, not a crash.
+    s.llms_status_file.write_text(json.dumps({"checked_at": 9e12, "sources": {"docs.astral.sh/ruff": "garbage"}}))
     monkeypatch.setattr(s, "llms_status_ttl", 1e6)
     anyio.run(verify)
     assert heads == 8
@@ -267,7 +267,7 @@ def test_search_all_uses_only_live_sources(monkeypatch: pytest.MonkeyPatch) -> N
         async with Session() as session:
             return await session.search(query, None, scope)
 
-    result = anyio.run(search, "длинные", "index")
+    result = anyio.run(search, "too long", "index")
     assert result.searched == ["docs.astral.sh/ruff"]
     assert result.skipped == ["dead.example: HTTP 404"]
     assert [h.title for h in result.hits] == ["E501"]
@@ -279,7 +279,7 @@ def test_search_all_uses_only_live_sources(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.usefixtures("home")
 def test_add_and_remove_source_persist(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(services, "LLMS_DEFAULT_SOURCES", (RUFF,))
-    pages = {"/llms.txt": INDEX, "/llms-full.txt": FULL, "/empty/llms.txt": "# Пусто\n"}
+    pages = {"/llms.txt": INDEX, "/llms-full.txt": FULL, "/empty/llms.txt": "# Empty\n"}
     _use(_serve(pages), monkeypatch)
     s = get_settings()
 
@@ -287,25 +287,26 @@ def test_add_and_remove_source_persist(monkeypatch: pytest.MonkeyPatch) -> None:
         async with Session(s) as session:
             return await session.add_source(domain, covers, index)
 
-    added = anyio.run(add, "new.example", "новое", None)
+    added = anyio.run(add, "new.example", "new", None)
     assert added.default is False
     assert added.index == "https://new.example/llms.txt"
-    assert added.full_size == len(FULL.encode())  # размер llms-full.txt узнан HEAD-ом
+    assert added.full_size == len(FULL.encode())  # llms-full.txt size found via HEAD
     assert s.llms_sources_file.is_file()
 
-    # Файл читается заново — так источник переживает перезапуск; флаг default
-    # в нём не хранится, и подделать его правкой файла нельзя.
+    # The file is re-read on each access — that's how a source survives a
+    # restart; the default flag isn't stored there, so it can't be forged by
+    # editing the file.
     assert [k.domain for k in services.all_sources(s)] == ["docs.astral.sh/ruff", "new.example"]
     assert "default" not in json.loads(s.llms_sources_file.read_text())["sources"][0]
     assert services.index_url("new.example", s) == "https://new.example/llms.txt"
 
-    with pytest.raises(UserError, match="уже есть"):
+    with pytest.raises(UserError, match="already exists"):
         anyio.run(add, "new.example", "x", None)
-    with pytest.raises(UserError, match="нет ни одной ссылки"):
+    with pytest.raises(UserError, match="no links at all"):
         anyio.run(add, "empty.example", "x", "https://empty.example/empty/llms.txt")
-    with pytest.raises(UserError, match="встроенный"):
+    with pytest.raises(UserError, match="built-in"):
         services.remove_source("docs.astral.sh/ruff", s)
-    with pytest.raises(UserError, match="нет"):
+    with pytest.raises(UserError, match="no such source"):
         services.remove_source("nobody.example", s)
 
     removed = services.remove_source("new.example", s)
@@ -341,7 +342,7 @@ def test_custom_cannot_shadow_default_or_claim_default_flag() -> None:
 
 @pytest.mark.usefixtures("home")
 def test_spa_domain_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Индекса нет: вместо него HTML-оболочка, и на мусор тоже 200.
+    # No index: an HTML shell comes back instead, and junk also gets a 200.
     _use(_serve({}, spa=True), monkeypatch)
 
     async def load() -> None:
@@ -354,7 +355,7 @@ def test_spa_domain_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.usefixtures("home")
 def test_text_index_trusted_on_spa_like_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Как docs.claude.com: настоящие файлы — text, на всё остальное — HTML 200.
+    # Like docs.claude.com: real files are text, everything else gets HTML 200.
     _use(_serve({"/llms.txt": INDEX, "/llms-full.txt": FULL}, spa=True), monkeypatch)
 
     async def load() -> LlmsIndex:
@@ -397,16 +398,16 @@ def test_cache_respects_ttl_and_skips_server_errors(home: Path, monkeypatch: pyt
                 await session.fetch(url)
 
     anyio.run(fetch, "https://h.example/a.txt", 2)
-    assert calls == 1  # второй раз — из кэша
+    assert calls == 1  # second time comes from the cache
     meta = next((home / "cache" / "mcp-openssh-connector").rglob("*.meta"))
     assert json.loads(meta.read_text())["status"] == 200
     monkeypatch.setattr(s, "llms_cache_ttl", 0.0)
     anyio.run(fetch, "https://h.example/a.txt", 1)
-    assert calls == 2  # протухло — перекачали
+    assert calls == 2  # stale — re-downloaded
 
     monkeypatch.setattr(s, "llms_cache_ttl", 1e6)
     anyio.run(fetch, "https://h.example/down.txt", 2)
-    assert calls == 4  # 503 не кэшируется: сбой сервера временный
+    assert calls == 4  # 503 isn't cached: a server failure is transient
 
 
 @pytest.mark.usefixtures("home")
@@ -417,13 +418,13 @@ def test_size_cap(monkeypatch: pytest.MonkeyPatch) -> None:
         async with Session(Settings(llms_max_bytes=10)) as session:
             await session.fetch("https://h.example/big.txt")
 
-    with pytest.raises(UserError, match="потолка"):
+    with pytest.raises(UserError, match="cap"):
         anyio.run(fetch)
 
 
 @pytest.mark.usefixtures("home")
 def test_redirect_checked_before_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Переадресация внутрь проверяется до отправки: запрос туда не уходит вовсе.
+    # A redirect into the internal network is checked before it's sent: the request never goes out.
     seen: list[str] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -452,20 +453,20 @@ def test_resolve_public_rejects_private_and_unresolvable(monkeypatch: pytest.Mon
                 (2, 1, 6, "", ("93.184.216.34", 0)),
                 (10, 1, 6, "", ("2606:2800:220:1:248:1893:25c8:1946", 0, 0, 0)),
             ]
-        raise OSError("нет такого имени")
+        raise OSError("no such host")
 
     monkeypatch.setattr(anyio, "getaddrinfo", getaddrinfo)
     anyio.run(services.resolve_public, "outer.example")
-    anyio.run(services.resolve_public, "93.184.216.34")  # литерал: без DNS
-    with pytest.raises(UserError, match="непубличный"):
+    anyio.run(services.resolve_public, "93.184.216.34")  # literal: no DNS
+    with pytest.raises(UserError, match="non-public"):
         anyio.run(services.resolve_public, "inner.example")
-    with pytest.raises(UserError, match="не разрешается"):
+    with pytest.raises(UserError, match="does not resolve"):
         anyio.run(services.resolve_public, "nowhere.example")
 
 
 @pytest.mark.usefixtures("home")
 def test_guard_runs_once_per_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Пробы вариантов бьют в один хост: DNS-проверка на сессию — одна.
+    # Variant probes all hit the same host: the DNS check runs once per session.
     _use(_serve({"/llms.txt": INDEX}), monkeypatch)
     resolved: list[str] = []
 

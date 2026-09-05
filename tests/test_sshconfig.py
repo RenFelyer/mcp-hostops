@@ -1,7 +1,7 @@
-"""Роутер управления ~/.ssh/config: managed-файл, known_hosts, copy_id — без сети.
+"""Router for managing ~/.ssh/config: managed file, known_hosts, copy_id — no network.
 
-`ssh -G`, ssh-copy-id и sshpass подменяются: проверяем разбор и сборку блоков,
-подключение через Include, очистку known_hosts настоящим ssh-keygen и argv copy_id.
+`ssh -G`, ssh-copy-id and sshpass are substituted: we check block parsing and
+assembly, wiring via Include, known_hosts cleanup with a real ssh-keygen, and copy_id's argv.
 """
 
 import shutil
@@ -35,7 +35,7 @@ def _fake_resolve(alias: str, _timeout: float) -> Host:
     return Host(alias=alias, hostname="10.0.0.5", user="admin", port=22, proxyjump="")
 
 
-# ── чистая логика блоков ───────────────────────────────────────────────────────
+# ── pure block logic ────────────────────────────────────────────────────────────
 
 
 def test_render_block_canonical() -> None:
@@ -48,12 +48,12 @@ def test_render_block_canonical() -> None:
 
 
 def test_render_block_omits_empty_optional() -> None:
-    # User, IdentityFile, ProxyJump пусты — их строк нет; Port есть всегда.
+    # User, IdentityFile, ProxyJump are empty — their lines are absent; Port is always present.
     assert services._render_block(ManagedHost(alias="a", hostname="h")) == "Host a\n    HostName h\n    Port 22\n"
 
 
 def test_parse_blocks_roundtrip() -> None:
-    text = "# шапка\n\nHost a\n    HostName h1\n    Port 22\n\nHost=b\n    HostName h2\n"
+    text = "# header\n\nHost a\n    HostName h1\n    Port 22\n\nHost=b\n    HostName h2\n"
     blocks = services._parse_blocks(text)
     assert [aliases for aliases, _ in blocks] == [["a"], ["b"]]
     assert blocks[0][1] == "Host a\n    HostName h1\n    Port 22\n"
@@ -63,10 +63,10 @@ def test_check_alias_rejects_bad() -> None:
     for bad in ("", "with space", "*.example", "-lead", "!neg", "has#hash"):
         with pytest.raises(UserError):
             services._check_alias(bad)
-    services._check_alias("ok_host.1")  # без исключения
+    services._check_alias("ok_host.1")  # no exception
 
 
-# ── add_host ───────────────────────────────────────────────────────────────────
+# ── add_host ─────────────────────────────────────────────────────────────────────
 
 
 def test_add_host_creates_managed_and_include(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,10 +81,10 @@ def test_add_host_creates_managed_and_include(tmp_path: Path, monkeypatch: pytes
     assert s.managed_config_file.stat().st_mode & 0o777 == 0o600
     assert "Host box\n    HostName 10.0.0.5\n    User admin\n    Port 22\n" in s.managed_config_file.read_text()
     assert f"Include {s.managed_config_file}" in s.ssh_config_file.read_text()
-    assert "box" in read_aliases(s.ssh_config_file)  # виден через Include
+    assert "box" in read_aliases(s.ssh_config_file)  # visible via Include
 
     second = services.add_host(ManagedHost(alias="box2", hostname="h2"))
-    assert second.include_added is False  # Include уже был
+    assert second.include_added is False  # Include was already there
     assert s.ssh_config_file.read_text().count("Include") == 1
 
 
@@ -106,7 +106,7 @@ def test_add_host_refuses_manual_alias(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr(services, "resolve", _fake_resolve)
     s.ssh_config_file.parent.mkdir(parents=True, exist_ok=True)
     s.ssh_config_file.write_text("Host manual\n    HostName 1.2.3.4\n", encoding="utf-8")
-    with pytest.raises(UserError, match="вручную"):
+    with pytest.raises(UserError, match="manually"):
         services.add_host(ManagedHost(alias="manual", hostname="y"))
 
 
@@ -116,7 +116,7 @@ def test_add_host_rejects_empty_hostname(tmp_path: Path, monkeypatch: pytest.Mon
         services.add_host(ManagedHost(alias="box", hostname="   "))
 
 
-# ── remove_host ────────────────────────────────────────────────────────────────
+# ── remove_host ──────────────────────────────────────────────────────────────────
 
 
 def test_remove_host_drops_block_and_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,18 +142,18 @@ def test_remove_host_keeps_known_when_flag_off(tmp_path: Path, monkeypatch: pyte
     s = _settings(tmp_path)
     _use(s, monkeypatch)
     monkeypatch.setattr(services, "resolve", _fake_resolve)
-    monkeypatch.setattr(services, "_forget", lambda *_: pytest.fail("known_hosts не трогаем без флага"))
+    monkeypatch.setattr(services, "_forget", lambda *_: pytest.fail("known_hosts must not be touched without the flag"))
     services.add_host(ManagedHost(alias="box", hostname="10.0.0.5"))
     res = services.remove_host("box", forget_known=False, drop_secret=False)
     assert res.known_hosts_removed == 0
     assert res.secret_removed is False
 
 
-# ── forget_host и known_hosts ──────────────────────────────────────────────────
+# ── forget_host and known_hosts ───────────────────────────────────────────────────
 
 
 def _known_hosts(tmp: Path, names: list[str]) -> Path:
-    """known_hosts с настоящей записью на каждое имя (ключ генерирует ssh-keygen)."""
+    """known_hosts with a real entry for each name (the key is generated by ssh-keygen)."""
     key = tmp / "seed"
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
     keytype, blob, *_ = key.with_suffix(".pub").read_text().split()
@@ -179,13 +179,13 @@ def test_forget_host_by_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         services, "resolve", lambda a, _t: Host(alias=a, hostname="10.0.0.5", user="u", port=22, proxyjump="")
     )
-    _known_hosts(tmp_path, ["10.0.0.5", "other"])  # пишет в s.known_hosts_file
+    _known_hosts(tmp_path, ["10.0.0.5", "other"])  # writes to s.known_hosts_file
     res = services.forget_host("box")
     assert res.target == "10.0.0.5"
     assert res.removed == 1
 
 
-# ── copy_id ────────────────────────────────────────────────────────────────────
+# ── copy_id ──────────────────────────────────────────────────────────────────────
 
 
 def _config_with(alias: str, s: Settings) -> None:
@@ -211,7 +211,7 @@ def test_copy_id_builds_argv_and_masks(tmp_path: Path, monkeypatch: pytest.Monke
     res = services.copy_id("box", "")
     assert seen == ["sshpass", "-f", str(secret), "ssh-copy-id", "-o", "StrictHostKeyChecking=accept-new", "box"]
     assert res.ok is True
-    assert res.detail == "***"  # строка, равная паролю, замаскирована
+    assert res.detail == "***"  # line equal to the password is masked
 
 
 def test_copy_id_identity_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,7 +237,7 @@ def test_copy_id_unknown_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     s = _settings(tmp_path)
     _use(s, monkeypatch)
     _config_with("box", s)
-    with pytest.raises(UserError, match="не описан"):
+    with pytest.raises(UserError, match="not described"):
         services.copy_id("nope", "")
 
 

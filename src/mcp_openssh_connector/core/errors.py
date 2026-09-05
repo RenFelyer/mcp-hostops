@@ -1,12 +1,12 @@
-"""Ошибки, адресованные вызывающему инструмент.
+"""Errors addressed to the tool caller.
 
-`UserError` наследует `ToolError` fastmcp: её текст уходит клиенту как есть, без
-обёртки «Error calling tool». Всё остальное (сбои ssh, ввода-вывода, логики)
-остаётся обычными исключениями — fastmcp сам оборачивает их и пишет в лог.
+`UserError` subclasses fastmcp's `ToolError`: its text reaches the client as-is, without
+the "Error calling tool" wrapper. Everything else (ssh, I/O, logic failures) remains a
+regular exception — fastmcp wraps and logs those itself.
 """
 
 from fastmcp.exceptions import ToolError
 
 
 class UserError(ToolError):
-    """Вызов неверен со стороны клиента: не тот алиас, нет пароля, нет задачи."""
+    """The call is invalid on the client's side: wrong alias, missing password, no such job."""

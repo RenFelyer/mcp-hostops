@@ -1,6 +1,6 @@
-"""Обработчики роутера хостов: статус и параметры хостов из ~/.ssh/config.
+"""Hosts router handlers: host status and parameters from ~/.ssh/config.
 
-Сервисы синхронные (socket, subprocess, файлы), обработчики уводят их в поток.
+Services are synchronous (socket, subprocess, files); handlers move them to a thread.
 """
 
 from typing import Annotated
@@ -17,39 +17,39 @@ from .services import check_statuses, list_statuses
 router: FastMCP = FastMCP(name="hosts", on_duplicate="error")
 
 
-@router.tool(title="Список хостов", tags={"hosts"}, annotations=READS_REMOTE)
+@router.tool(title="List hosts", tags={"hosts"}, annotations=READS_REMOTE)
 async def list_hosts(refresh: bool = False) -> ListHostsResult:
-    """Хосты из ~/.ssh/config с их последней известной доступностью.
+    """Hosts from ~/.ssh/config with their last known availability.
 
-    Кэш старше порога сервер обновляет сам; хост, которого в кэше нет, получает
-    статус unknown.
+    The server refreshes a cache older than the threshold itself; a host missing
+    from the cache gets an unknown status.
 
     Args:
-        refresh: Перемерить заново вместо чтения кэша.
+        refresh: Re-measure now instead of reading the cache.
     """
     return await anyio.to_thread.run_sync(list_statuses, refresh)
 
 
-@router.tool(title="Проверка хостов", tags={"hosts"}, annotations=READS_REMOTE)
+@router.tool(title="Check hosts", tags={"hosts"}, annotations=READS_REMOTE)
 async def check_hosts(
     aliases: Annotated[list[NonEmptyStr], Field(min_length=1)], deep: bool = False
 ) -> list[CheckResult]:
-    """Проверить доступность конкретных хостов прямо сейчас, мимо кэша.
+    """Check the availability of specific hosts right now, bypassing the cache.
 
     Args:
-        aliases: Алиасы из ~/.ssh/config; чужой алиас даёт статус unknown.
-        deep: False — TCP-проба порта («хост поднят»); True — реальный вход
-            `ssh ... true` («ключ принят, внутрь пускают»), причина отказа в
-            detail.
+        aliases: Aliases from ~/.ssh/config; an unknown alias gets an unknown status.
+        deep: False — TCP probe of the port ("host is up"); True — an actual
+            login (`ssh ... true`, "key accepted, access granted"), failure
+            reason in detail.
     """
     return await anyio.to_thread.run_sync(check_statuses, aliases, deep)
 
 
-@router.tool(title="Параметры хоста", tags={"hosts"}, annotations=READS_LOCAL)
+@router.tool(title="Host parameters", tags={"hosts"}, annotations=READS_LOCAL)
 async def host_info(alias: NonEmptyStr) -> Host:
-    """Параметры одного хоста глазами ssh: hostname, user, port, jump-хост.
+    """Parameters of a single host as ssh sees them: hostname, user, port, jump host.
 
     Args:
-        alias: Алиас из ~/.ssh/config.
+        alias: Alias from ~/.ssh/config.
     """
     return await require_host(alias)

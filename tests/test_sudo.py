@@ -1,4 +1,4 @@
-"""Разбор sudo, чтение секрета и маскировка — чистая логика без сети."""
+"""Detecting sudo, reading the secret, and masking — pure logic with no network."""
 
 from pathlib import Path
 
@@ -20,21 +20,21 @@ from mcp_openssh_connector.core.utils.sudo import (
         ("whoami", False),
         ("sudo whoami", True),
         ("ls && sudo apt update", True),
-        ("echo sudo", False),  # sudo как аргумент, не глагол
+        ("echo sudo", False),  # sudo as an argument, not a verb
         ("grep -r sudo /etc", False),
-        ("env FOO=bar sudo systemctl restart x", True),  # обёртка env
-        ("env -u HOME sudo true", True),  # опция env со значением
-        ("VAR=1 sudo -n true", True),  # присваивание перед sudo
+        ("env FOO=bar sudo systemctl restart x", True),  # env wrapper
+        ("env -u HOME sudo true", True),  # env option with a value
+        ("VAR=1 sudo -n true", True),  # assignment before sudo
         ("nohup sudo backup &", True),
-        ("sleep 1 & sudo reboot", True),  # фоновая команда — тоже разделитель
-        ("ls 2>&1 | grep sudo", False),  # `>&` — перенаправление, не разделитель
-        ("timeout 5 sudo systemctl stop x", True),  # обёртка с позиционным аргументом
+        ("sleep 1 & sudo reboot", True),  # background command is also a separator
+        ("ls 2>&1 | grep sudo", False),  # `>&` is a redirection, not a separator
+        ("timeout 5 sudo systemctl stop x", True),  # wrapper with a positional argument
         ("timeout -s KILL 5 sudo true", True),
-        ("time -p sudo true", True),  # `-p` у time — флаг, а не опция со значением
+        ("time -p sudo true", True),  # time's `-p` is a flag, not a valued option
         ("nice -n 10 sudo make", True),
-        ("bash -c 'sudo reboot'", True),  # вложенный sudo внутри sh -c
-        ("bash -lc 'sudo reboot'", True),  # флаг -c склеен с другим
-        ("bash -o pipefail -c 'sudo reboot'", True),  # `-o` берёт значение
+        ("bash -c 'sudo reboot'", True),  # nested sudo inside sh -c
+        ("bash -lc 'sudo reboot'", True),  # -c flag fused with another
+        ("bash -o pipefail -c 'sudo reboot'", True),  # `-o` takes a value
         ("sh -c 'ls; sudo tail -f /var/log/x'", True),
         ("bash -c 'echo hi'", False),
         ("doas pkg upgrade", True),
@@ -53,39 +53,39 @@ def test_decide_prime_modes() -> None:
 
 
 def test_mask_masks_whole_line_password() -> None:
-    # Эхо pty — пароль отдельной строкой: маскируется целиком.
-    assert mask("s3cret\r\nреальный вывод", "s3cret") == "***\nреальный вывод"
+    # pty echo — the password on its own line: masked in full.
+    assert mask("s3cret\r\nreal output", "s3cret") == "***\nreal output"
     assert mask("s3cret", "s3cret") == "***"
 
 
 def test_mask_does_not_corrupt_substrings() -> None:
-    # Короткий пароль-подстрока не должен портить обычный вывод.
+    # A short password-as-substring must not corrupt normal output.
     assert mask("chroot to /root", "root") == "chroot to /root"
     assert mask("banana bread", "an") == "banana bread"
 
 
 def test_mask_noop() -> None:
-    assert mask("текст", None) == "текст"
-    assert mask("текст", "") == "текст"
+    assert mask("text", None) == "text"
+    assert mask("text", "") == "text"
 
 
 def test_read_secret_rejects_traversal(tmp_path: Path) -> None:
     s = Settings(secret_dir=tmp_path)
-    with pytest.raises(SudoError, match="за пределы"):
+    with pytest.raises(SudoError, match="outside"):
         read_secret("../evil", s)
 
 
 def test_read_secret_ok(tmp_path: Path) -> None:
     secret = tmp_path / "host1.secret"
-    secret.write_text("пароль\r\n", encoding="utf-8")
+    secret.write_text("password\r\n", encoding="utf-8")
     secret.chmod(0o600)
     s = Settings(secret_dir=tmp_path)
-    assert read_secret("host1", s) == "пароль"
+    assert read_secret("host1", s) == "password"
 
 
 def test_read_secret_missing(tmp_path: Path) -> None:
     s = Settings(secret_dir=tmp_path)
-    with pytest.raises(SudoError, match="нет файла"):
+    with pytest.raises(SudoError, match="not found"):
         read_secret("nope", s)
 
 
@@ -94,23 +94,23 @@ def test_read_secret_bad_mode(tmp_path: Path) -> None:
     secret.write_text("x", encoding="utf-8")
     secret.chmod(0o644)
     s = Settings(secret_dir=tmp_path)
-    with pytest.raises(SudoError, match="небезопасные права"):
+    with pytest.raises(SudoError, match="unsafe permissions"):
         read_secret("host2", s)
 
 
 def test_read_secret_not_regular(tmp_path: Path) -> None:
     (tmp_path / "dir.secret").mkdir(mode=0o700)
     s = Settings(secret_dir=tmp_path)
-    with pytest.raises(SudoError, match="обычным файлом"):
+    with pytest.raises(SudoError, match="regular file"):
         read_secret("dir", s)
 
 
 def test_read_secret_follows_own_symlink(tmp_path: Path) -> None:
-    # Своя ссылка на файл в другом месте — допустима: проверяется сам файл.
+    # Our own symlink to a file elsewhere is fine: the actual file is checked.
     store = tmp_path / "store"
     store.mkdir()
     real = store / "pw"
-    real.write_text("пароль", encoding="utf-8")
+    real.write_text("password", encoding="utf-8")
     real.chmod(0o600)
     (tmp_path / "linked.secret").symlink_to(real)
-    assert read_secret("linked", Settings(secret_dir=tmp_path)) == "пароль"
+    assert read_secret("linked", Settings(secret_dir=tmp_path)) == "password"

@@ -1,1 +1,1 @@
-"""MCP-сервер для работы с удалёнными хостами через OpenSSH."""
+"""MCP server for working with remote hosts over OpenSSH."""

@@ -1,16 +1,17 @@
-"""Сервис роутера управления ~/.ssh/config: managed-файл, known_hosts, ssh-copy-id.
+"""Service of the ~/.ssh/config management router: managed file, known_hosts, ssh-copy-id.
 
-Сервер владеет отдельным managed-файлом (`managed_config_file`) и подключает его
-к основному конфигу директивой `Include` — один раз, абсолютным путём. Ручной
-`~/.ssh/config` при этом не переписывается: add_host/remove_host трогают только
-managed-файл, который всегда пишется в каноническом виде (`Host`, отступ в четыре
-пробела, порядок ключей из `MANAGED_KEY_ORDER`). Так конфиг остаётся стандартным
-и пополняемым, а правки руками — нетронутыми.
+The server owns a separate managed file (`managed_config_file`) and wires it into
+the main config via an `Include` directive — once, with an absolute path. The manual
+`~/.ssh/config` is never rewritten: add_host/remove_host only touch the managed
+file, which is always written in canonical form (`Host`, four-space indent, key
+order from `MANAGED_KEY_ORDER`). This keeps the config standard and appendable,
+while manual edits stay untouched.
 
-Разбор алиаса и настройки сервис берёт сам (`get_settings`, `resolve`);
-синхронную работу с файлами и подпроцессами обработчики уводят в поток. Ошибки
-клиенту — `UserError`. Пароль для ssh-copy-id — тот же `~/.ssh/<alias>.secret`,
-что и для sudo: его отдаёт хосту `sshpass -f`, минуя argv и логи.
+The service resolves the alias and settings itself (`get_settings`, `resolve`);
+handlers move synchronous file and subprocess work to a thread. Errors to the
+client are `UserError`. The password for ssh-copy-id is the same
+`~/.ssh/<alias>.secret` used for sudo: it is passed to the host via `sshpass -f`,
+bypassing argv and logs.
 """
 
 import re
@@ -34,25 +35,25 @@ from ...core.utils.ssh import run_sync
 from ...core.utils.sudo import mask, read_secret
 from .schemas import AddHostResult, CopyIdResult, ForgetHostResult, ManagedHost, RemoveHostResult
 
-# Строка, открывающая Host-блок: ключевое слово `Host`, форма `Host x` или `Host=x`.
+# Line opening a Host block: keyword `Host`, form `Host x` or `Host=x`.
 _HOST_LINE = re.compile(r"(?i)^\s*host[\s=]")
 
-# Блок managed-файла: алиасы из строки `Host` и полный текст блока.
+# Managed-file block: aliases from the `Host` line and the block's full text.
 Block = tuple[list[str], str]
 
 
 def _check_alias(alias: str) -> None:
-    """Проверить, что алиас годится для записи в конфиг.
+    """Check that the alias is fit to be written into the config.
 
     Raises:
-        UserError: пусто, есть пробел, символ маски (`*?`), отрицание или ведущий `-`.
+        UserError: empty, contains whitespace, is one of `* ? # !`, or starts with `-`.
     """
     if not alias or any(ch.isspace() for ch in alias) or alias[0] in "-!" or any(ch in alias for ch in "*?#"):
-        raise UserError(f"алиас {alias!r}: без пробелов и без * ? # !, не начинается с -")
+        raise UserError(f"alias {alias!r}: no spaces and no * ? # !, must not start with -")
 
 
 def _parse_blocks(text: str) -> list[Block]:
-    """Разобрать managed-файл на Host-блоки; всё вне блоков (шапка) отбрасывается."""
+    """Parse the managed file into Host blocks; everything outside blocks (the header) is dropped."""
     blocks: list[Block] = []
     aliases: list[str] | None = None
     buf: list[str] = []
@@ -70,7 +71,7 @@ def _parse_blocks(text: str) -> list[Block]:
 
 
 def _render_block(host: ManagedHost) -> str:
-    """Собрать канонический Host-блок: заголовок и опции с отступом в четыре пробела."""
+    """Build the canonical Host block: header and options with four-space indent."""
     named = {
         "HostName": host.hostname,
         "User": host.user,
@@ -85,12 +86,12 @@ def _render_block(host: ManagedHost) -> str:
 
 
 def _render_file(blocks: list[Block]) -> bytes:
-    """Managed-файл целиком: шапка и блоки через пустую строку."""
+    """The managed file as a whole: header and blocks separated by a blank line."""
     return "".join([MANAGED_HEADER, *(f"\n{text}" for _, text in blocks)]).encode()
 
 
 def _read_blocks(s: Settings) -> list[Block]:
-    """Блоки managed-файла; отсутствующего или нечитаемого файла — пусто."""
+    """Blocks of the managed file; a missing or unreadable file — empty."""
     try:
         return _parse_blocks(s.managed_config_file.read_text(encoding="utf-8"))
     except OSError:
@@ -98,24 +99,24 @@ def _read_blocks(s: Settings) -> list[Block]:
 
 
 def _write_blocks(blocks: list[Block], s: Settings) -> None:
-    """Атомарно перезаписать managed-файл и закрыть его права до 0600."""
+    """Atomically rewrite the managed file and lock its permissions down to 0600."""
     write_bytes(s.managed_config_file, _render_file(blocks))
     s.managed_config_file.chmod(SECRET_FILE_MODE)
 
 
 def _ensure_available(s: Settings) -> bool:
-    """Создать managed-файл и подключить его к основному конфигу.
+    """Create the managed file and wire it into the main config.
 
     Returns:
-        True — строка `Include` добавлена этим вызовом; False — уже была.
+        True — the `Include` line was added by this call; False — it was already there.
     """
     s.managed_config_file.parent.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
     if not s.managed_config_file.exists():
         _write_blocks([], s)
     if s.managed_config_file.resolve() in config_files(s.ssh_config_file):
         return False
-    # Абсолютный путь: относительный ssh раскрыл бы от ~/.ssh, а не от каталога
-    # этого конфига. В начало — чтобы адресный Host побеждал общий `Host *`.
+    # Absolute path: a relative one would be resolved by ssh from ~/.ssh, not from
+    # this config's directory. Prepended so a specific Host wins over a general `Host *`.
     include = f"Include {s.managed_config_file}\n".encode()
     s.ssh_config_file.parent.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
     try:
@@ -127,24 +128,26 @@ def _ensure_available(s: Settings) -> bool:
 
 
 def add_host(spec: ManagedHost) -> AddHostResult:
-    """Записать Host-блок в managed-файл и вернуть, как ssh -G его теперь видит.
+    """Write a Host block to the managed file and return how ssh -G now sees it.
 
-    Существующий managed-блок того же алиаса заменяется; алиас, уже описанный в
-    конфиге вручную, не трогается — иначе на один алиас пришлось бы два Host.
+    An existing managed block for the same alias is replaced; an alias already
+    described manually in the config is left untouched — otherwise one alias
+    would end up with two Host entries.
 
     Raises:
-        UserError: алиас негоден, hostname пуст или алиас занят ручной записью.
-        OSError: конфиг или managed-файл не записались.
+        UserError: the alias is invalid, hostname is empty, or the alias is taken
+            by a manual entry.
+        OSError: the config or managed file could not be written.
     """
     _check_alias(spec.alias)
     if not spec.hostname.strip():
-        raise UserError("hostname пуст")
+        raise UserError("hostname is empty")
     s = get_settings()
     include_added = _ensure_available(s)
     blocks = _read_blocks(s)
     managed = {alias for aliases, _ in blocks for alias in aliases}
     if spec.alias in read_aliases(s.ssh_config_file) and spec.alias not in managed:
-        raise UserError(f"алиас {spec.alias!r} уже описан в конфиге вручную")
+        raise UserError(f"alias {spec.alias!r} is already described manually in the config")
     kept = [(aliases, text) for aliases, text in blocks if spec.alias not in aliases]
     kept.append(([spec.alias], _render_block(spec)))
     _write_blocks(kept, s)
@@ -157,17 +160,18 @@ def add_host(spec: ManagedHost) -> AddHostResult:
 
 
 def remove_host(alias: str, forget_known: bool, drop_secret: bool) -> RemoveHostResult:
-    """Убрать managed-блок алиаса и, по флагам, его записи known_hosts и секрет.
+    """Remove the alias's managed block and, per flags, its known_hosts entries and secret.
 
     Raises:
-        UserError: алиас не описан в managed-файле (ручные записи не трогаем).
-        OSError: managed-файл не записался.
+        UserError: the alias isn't described in the managed file (manual entries
+            are left untouched).
+        OSError: the managed file could not be written.
     """
     s = get_settings()
     blocks = _read_blocks(s)
     if not any(alias in aliases for aliases, _ in blocks):
-        raise UserError(f"хост {alias!r} не в managed-файле; ручные записи remove_host не трогает")
-    host = resolve(alias, s.ssh_g_timeout)  # пока блок на месте — узнаём hostname для known_hosts
+        raise UserError(f"host {alias!r} is not in the managed file; remove_host does not touch manual entries")
+    host = resolve(alias, s.ssh_g_timeout)  # while the block is still in place — get the hostname for known_hosts
     _write_blocks([(aliases, text) for aliases, text in blocks if alias not in aliases], s)
     removed = _forget(host, s) if forget_known and host is not None else 0
     dropped = _drop_secret(alias, s) if drop_secret else False
@@ -175,10 +179,11 @@ def remove_host(alias: str, forget_known: bool, drop_secret: bool) -> RemoveHost
 
 
 def forget_host(target: str) -> ForgetHostResult:
-    """Удалить записи known_hosts для хоста, не трогая конфиг.
+    """Remove known_hosts entries for a host without touching the config.
 
-    `target` — алиас из конфига (тогда чистим его hostname) или сам hostname/IP.
-    Нужно, когда ключ хоста сменился («Remote host identification has changed»).
+    `target` is an alias from the config (in which case we clean its hostname)
+    or the hostname/IP itself. Needed when the host key changed
+    ("Remote host identification has changed").
     """
     s = get_settings()
     host = resolve(target, s.ssh_g_timeout)
@@ -190,24 +195,24 @@ def forget_host(target: str) -> ForgetHostResult:
 
 
 def copy_id(alias: str, identity: str) -> CopyIdResult:
-    """Установить публичный ключ на хост через ssh-copy-id, пароль — из секрета.
+    """Install a public key on the host via ssh-copy-id; the password comes from the secret.
 
-    Пароль хоста берётся из `~/.ssh/<alias>.secret` и отдаётся `sshpass -f`, не
-    попадая ни в argv, ни в лог. Ключ хоста при первом входе принимается
-    (`StrictHostKeyChecking=accept-new`), иначе неинтерактивный ssh завис бы на
-    вопросе доверия.
+    The host password is taken from `~/.ssh/<alias>.secret` and passed to
+    `sshpass -f`, landing neither in argv nor in logs. The host key is accepted
+    on first connection (`StrictHostKeyChecking=accept-new`), otherwise a
+    non-interactive ssh would hang on the trust prompt.
 
     Raises:
-        UserError: алиас не в конфиге, нет ssh-copy-id или sshpass, недоступен
-            секрет, либо ssh-copy-id не уложился в таймаут.
+        UserError: the alias isn't in the config, ssh-copy-id or sshpass is
+            missing, the secret is unavailable, or ssh-copy-id exceeded the timeout.
     """
     s = get_settings()
     if alias not in read_aliases(s.ssh_config_file):
-        raise UserError(f"хост {alias!r} не описан в ~/.ssh/config")
+        raise UserError(f"host {alias!r} is not described in ~/.ssh/config")
     for tool in ("ssh-copy-id", "sshpass"):
         if shutil.which(tool) is None:
-            raise UserError(f"нужен {tool}: пароль хоста берётся из ~/.ssh/<alias>.secret")
-    password = read_secret(alias, s)  # валидирует наличие и права секрета
+            raise UserError(f"{tool} is required: the host password is taken from ~/.ssh/<alias>.secret")
+    password = read_secret(alias, s)  # validates that the secret exists and has the right permissions
     argv = ["sshpass", "-f", str(s.secret_file(alias)), "ssh-copy-id", "-o", "StrictHostKeyChecking=accept-new"]
     if identity:
         argv += ["-i", identity]
@@ -215,15 +220,15 @@ def copy_id(alias: str, identity: str) -> CopyIdResult:
     try:
         done = run_sync(argv, s.copy_id_timeout)
     except subprocess.TimeoutExpired as err:
-        raise UserError(f"ssh-copy-id: таймаут {s.copy_id_timeout} с") from err
+        raise UserError(f"ssh-copy-id: timeout after {s.copy_id_timeout}s") from err
     except OSError as err:
-        raise UserError(f"ssh-copy-id не запустился: {err}") from err
+        raise UserError(f"ssh-copy-id failed to start: {err}") from err
     lines = [line for line in mask(done.stdout + done.stderr, password).splitlines() if line.strip()]
     return CopyIdResult(alias=alias, ok=done.returncode == 0, detail=lines[-1] if lines else "")
 
 
 def _drop_secret(alias: str, s: Settings) -> bool:
-    """Удалить файл `~/.ssh/<alias>.secret`; False — его не было."""
+    """Remove the `~/.ssh/<alias>.secret` file; False — it wasn't there."""
     try:
         s.secret_file(alias).unlink()
     except OSError:
@@ -232,7 +237,7 @@ def _drop_secret(alias: str, s: Settings) -> bool:
 
 
 def _forget(host: Host, s: Settings) -> int:
-    """Удалить записи known_hosts хоста: по hostname и, если порт нестандартный, `[host]:port`."""
+    """Remove the host's known_hosts entries: by hostname and, if the port is non-default, `[host]:port`."""
     names = [host.hostname]
     if host.port != SSH_DEFAULT_PORT:
         names.append(f"[{host.hostname}]:{host.port}")
@@ -247,16 +252,16 @@ def _count_lines(path: Path) -> int:
 
 
 def _keygen_remove(names: list[str], known_file: Path) -> int:
-    """`ssh-keygen -R` по каждому имени; вернуть, на сколько строк файл убыл.
+    """`ssh-keygen -R` for each name; return by how many lines the file shrank.
 
-    ssh-keygen сам разбирает хешированные записи и переписывает файл; сколько
-    удалено — считаем по разнице числа строк (он же кладёт рядом `.old`).
+    ssh-keygen parses hashed entries itself and rewrites the file; how many were
+    removed is counted from the line-count difference (it also drops an `.old` file alongside).
 
     Raises:
-        UserError: ssh-keygen не найден.
+        UserError: ssh-keygen not found.
     """
     if shutil.which("ssh-keygen") is None:
-        raise UserError("ssh-keygen не найден")
+        raise UserError("ssh-keygen not found")
     if not known_file.exists():
         return 0
     before = _count_lines(known_file)

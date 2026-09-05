@@ -1,4 +1,4 @@
-"""Разбор ~/.ssh/config: чтение алиасов без обращения к ssh."""
+"""Parsing ~/.ssh/config: reading aliases without calling ssh."""
 
 from pathlib import Path
 
@@ -6,9 +6,9 @@ from mcp_openssh_connector.core.utils.hosts import read_aliases
 
 
 def test_read_aliases_order_dedup_patterns(tmp_path: Path) -> None:
-    # beta gamma — несколько имён; *.example.com и with?wild — шаблоны (пропуск);
-    # !neg — отрицание (пропуск); закомментированный Host — не хост; повтор alpha
-    # — без дубля; delta с хвостовым комментарием; Host=eq — форма с `=`.
+    # beta gamma — multiple names; *.example.com and with?wild — wildcards (skipped);
+    # !neg — negation (skipped); commented-out Host — not a host; repeated alpha
+    # — no duplicate; delta with a trailing comment; Host=eq — the `=` form.
     config = tmp_path / "config"
     config.write_text(
         "Host alpha\n"
@@ -19,7 +19,7 @@ def test_read_aliases_order_dedup_patterns(tmp_path: Path) -> None:
         "Host !neg other\n"
         "# Host commented\n"
         "Host alpha\n"
-        "Host delta  # хвостовой комментарий\n"
+        "Host delta  # trailing comment\n"
         "Host=eq\n",
         encoding="utf-8",
     )
@@ -28,7 +28,7 @@ def test_read_aliases_order_dedup_patterns(tmp_path: Path) -> None:
 
 def test_read_aliases_empty(tmp_path: Path) -> None:
     config = tmp_path / "config"
-    config.write_text("# только комментарии\n", encoding="utf-8")
+    config.write_text("# only comments\n", encoding="utf-8")
     assert read_aliases(config) == []
 
 
@@ -55,11 +55,11 @@ def test_read_aliases_include_cycle(tmp_path: Path) -> None:
     b = tmp_path / "b"
     a.write_text(f"Host ha\nInclude {b}\n", encoding="utf-8")
     b.write_text(f"Host hb\nInclude {a}\n", encoding="utf-8")
-    assert read_aliases(a) == ["ha", "hb"]  # цикл не зациклил
+    assert read_aliases(a) == ["ha", "hb"]  # the cycle didn't loop forever
 
 
 def test_read_aliases_include_skips_dotfiles_by_wildcard(tmp_path: Path) -> None:
-    # glob(3) в ssh не подставляет точку под маску; `.hidden.conf` — мимо.
+    # ssh's glob(3) doesn't match a dot under a wildcard; `.hidden.conf` is skipped.
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
     (conf_d / "a.conf").write_text("Host shown\n", encoding="utf-8")

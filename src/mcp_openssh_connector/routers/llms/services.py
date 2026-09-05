@@ -1,29 +1,31 @@
-"""Сервис роутера llms.txt: реестр источников, скачивание с кэшем, разбор, поиск.
+"""Service layer for the llms.txt router: source registry, cached downloads, parsing, search.
 
-Реестр — встроенный список `LLMS_DEFAULT_SOURCES` (проверенное, удалить нельзя)
-плюс пользовательский JSON-файл `llms_sources_file`, который переживает
-перезапуск сервера. Флаг `default` в файл не пишется и из него не читается,
-чтобы правка руками не сделала источник неудаляемым; домены, совпадающие со
-встроенными, из файла пропускаются.
+The registry is the built-in `LLMS_DEFAULT_SOURCES` list (vetted, can't be
+removed) plus a user JSON file, `llms_sources_file`, that survives a server
+restart. The `default` flag is neither written to nor read from that file, so
+that hand-editing it can't make a source un-removable; domains that collide
+with a built-in one are skipped when reading the file.
 
-Сеть асинхронная (`httpx2.AsyncClient`). Один вызов инструмента — одна
-`Session`: HTTP-клиент с общим пулом соединений, чтобы пробы вариантов и поиск
-по многим источникам не открывали TLS-соединение на каждый запрос. Всё
-скачанное ложится в кэш на диске с TTL: индекс и страницы перечитываются редко,
-а `llms-full.txt` бывает десятки мегабайт и целиком в ответ не идёт никогда —
-только совпадения по разделам. Диск и разбор больших файлов уходят в поток,
-чтобы не останавливать цикл событий.
+Networking is async (`httpx2.AsyncClient`). One tool call is one `Session`: an
+HTTP client with a shared connection pool, so that probing variants and
+searching across many sources don't open a new TLS connection per request.
+Everything downloaded lands in an on-disk cache with a TTL: the index and
+pages are re-read rarely, and `llms-full.txt` can be tens of megabytes and is
+never returned in full — only matched sections. Disk I/O and parsing of large
+files run in a thread, so the event loop isn't blocked.
 
-Сервер ходит только по https на публичные имена, разрешающиеся в публичные
-адреса: адрес выбирает клиент, и без этого ограничения инструмент стал бы окном
-во внутреннюю сеть. Правило применяется хуком к каждому запросу, в том числе к
-каждому ходу переадресации, до его отправки. Адрес не закрепляется: имя,
-которое сменит ответ DNS между проверкой и соединением, проверка не поймает.
+The server only fetches https on public names that resolve to public
+addresses: the client picks the address, and without this restriction the
+tool would be a window into the internal network. The rule is applied by a
+hook to every request, including every redirect hop, before it's sent. The
+address isn't pinned: a name whose DNS answer changes between the check and
+the connection won't be caught by it.
 
-Часть сайтов на любой путь отдаёт 200 с HTML-оболочкой, при этом настоящие
-файлы у них приходят как text/plain. Поэтому заглушкой считается только ресурс,
-который сам выглядит HTML, когда домен ещё и отвечает 200 на мусорный путь
-рядом с ним; текстовый ответ — документ, что бы домен ни отдавал на мусор.
+Some sites return 200 with an HTML shell for any path, while their real files
+come back as text/plain. So something only counts as a stub when the resource
+itself looks like HTML *and* the domain also returns 200 for a junk path next
+to it; a text response is a real document no matter what the domain returns
+for junk.
 """
 
 import contextlib
@@ -78,12 +80,12 @@ log = logging.getLogger(__name__)
 _LINK = re.compile(r"\[(?P<title>[^\]]*)\]\((?P<url>[^)\s]+)\)\s*:?\s*(?P<desc>.*)")
 _HEADING = re.compile(r"#{1,3} ")
 _HOSTNAME = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")
-_VERDICTS = TypeAdapter(dict[str, SourceVerdict])  # содержимое файла итогов по доменам
-_SOURCES = TypeAdapter(list[KnownSource])  # содержимое файла пользовательских источников
+_VERDICTS = TypeAdapter(dict[str, SourceVerdict])  # contents of the outcomes file, keyed by domain
+_SOURCES = TypeAdapter(list[KnownSource])  # contents of the user sources file
 
 
 class Fetched(BaseModel):
-    """Скачанный ресурс: код, тип и размер содержимого, тело (у HEAD — пустое)."""
+    """A downloaded resource: status, content type and length, body (empty for HEAD)."""
 
     status: int
     content_type: str
@@ -92,31 +94,31 @@ class Fetched(BaseModel):
 
     @property
     def ok(self) -> bool:
-        """Код ответа не ошибка (меньше 400)."""
+        """Response status is not an error (below 400)."""
         return self.status < HTTPStatus.BAD_REQUEST
 
     @property
     def cacheable(self) -> bool:
-        """Ответ стоит помнить: успех и устойчивые отказы, но не сбои сервера и не 429."""
+        """Response is worth remembering: successes and stable failures, but not server errors or 429."""
         return self.status < HTTPStatus.INTERNAL_SERVER_ERROR and self.status != HTTPStatus.TOO_MANY_REQUESTS
 
     @property
     def text(self) -> str:
-        """Тело текстом; байты вне UTF-8 заменяются, а не роняют вызов."""
+        """Body as text; bytes outside UTF-8 are replaced rather than failing the call."""
         return self.body.decode("utf-8", "replace")
 
     @property
     def is_html(self) -> bool:
-        """Похоже на HTML по типу содержимого или по началу тела."""
+        """Looks like HTML by content type or by the start of the body."""
         head = self.body.lstrip()[:15].lower()
         return self.content_type.lower().startswith("text/html") or head.startswith((b"<!doctype", b"<html"))
 
 
 def make_client(s: Settings, guard: Callable[[httpx2.Request], Awaitable[None]]) -> httpx2.AsyncClient:
-    """HTTP-клиент на один вызов инструмента; `guard` зовётся перед каждым запросом.
+    """HTTP client for one tool call; `guard` is called before every request.
 
-    Тесты подменяют функцию, чтобы подставить транспорт, но хук обязаны
-    сохранить: без него проверка адреса не работает.
+    Tests replace this function to swap in a transport, but must keep the
+    hook: without it, address verification doesn't run.
     """
     return httpx2.AsyncClient(
         timeout=s.llms_timeout,
@@ -128,35 +130,37 @@ def make_client(s: Settings, guard: Callable[[httpx2.Request], Awaitable[None]])
 
 
 def check_url(url: str) -> str:
-    """Адрес, по которому сервер готов ходить: https и публичное имя хоста.
+    """Address the server is willing to fetch: https and a public hostname.
 
     Returns:
-        Имя хоста в нижнем регистре — для проверки, куда оно разрешается.
+        The hostname in lowercase — to check what it resolves to.
 
     Raises:
-        UserError: не https, имя хоста не доменное, localhost или непубличный IP.
+        UserError: not https, hostname isn't a domain name, localhost or a
+            non-public IP.
     """
     parts = urlsplit(url)
     host = parts.hostname or ""
     if parts.scheme != "https":
-        raise UserError(f"{url}: сервер ходит только по https")
+        raise UserError(f"{url}: server only fetches over https")
     with contextlib.suppress(ValueError):
         if not ipaddress.ip_address(host).is_global:
-            raise UserError(f"{url}: непубличный адрес")
+            raise UserError(f"{url}: non-public address")
     if not _HOSTNAME.match(host) or host == "localhost" or host.endswith(".localhost"):
-        raise UserError(f"{url}: адрес должен вести на публичный домен")
+        raise UserError(f"{url}: address must resolve to a public domain")
     return host
 
 
 async def resolve_public(host: str) -> None:
-    """Имя должно разрешаться, и только в публичные адреса.
+    """The name must resolve, and only to public addresses.
 
-    Имя вида `10-0-0-1.nip.io` или внутреннее имя из search-домена проходит
-    проверку по виду, но ведёт внутрь сети; ловится здесь. IP-литерал уже
-    проверен в `check_url`.
+    A name like `10-0-0-1.nip.io` or an internal name from a search domain
+    passes the shape check but leads into the network; caught here. An IP
+    literal is already checked in `check_url`.
 
     Raises:
-        UserError: имя не разрешается или хотя бы один его адрес непубличный.
+        UserError: name doesn't resolve, or at least one of its addresses is
+            non-public.
     """
     with contextlib.suppress(ValueError):
         ipaddress.ip_address(host)
@@ -164,18 +168,18 @@ async def resolve_public(host: str) -> None:
     try:
         found = await anyio.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except OSError as err:
-        raise UserError(f"{host}: имя не разрешается ({err})") from err
+        raise UserError(f"{host}: name does not resolve ({err})") from err
     for *_, sockaddr in found:
         try:
             public = ipaddress.ip_address(sockaddr[0]).is_global
         except ValueError:
             public = False
         if not public:
-            raise UserError(f"{host}: имя ведёт на непубличный адрес")
+            raise UserError(f"{host}: name resolves to a non-public address")
 
 
 def custom_sources(s: Settings) -> list[KnownSource]:
-    """Пользовательские источники из файла; битый или отсутствующий файл — пусто."""
+    """User sources from the file; a missing or corrupt file yields an empty list."""
     data = store.load(s.llms_sources_file) or {}
     builtin = {known.domain for known in LLMS_DEFAULT_SOURCES}
     try:
@@ -190,43 +194,43 @@ def _save_sources(items: list[KnownSource], s: Settings) -> None:
 
 
 def all_sources(s: Settings) -> list[KnownSource]:
-    """Встроенные, затем пользовательские; домены не повторяются."""
+    """Built-in sources, then user ones; domains aren't duplicated."""
     return [*LLMS_DEFAULT_SOURCES, *custom_sources(s)]
 
 
 def find_source(domain: str, s: Settings) -> KnownSource | None:
-    """Источник по домену или адресу индекса."""
+    """Source by domain or index address."""
     return next((known for known in all_sources(s) if domain in (known.domain, known.index)), None)
 
 
 def _forget_status(s: Settings) -> None:
-    """Сбросить итоги проверки: состав реестра изменился."""
+    """Reset check outcomes: the registry's composition has changed."""
     with contextlib.suppress(OSError):
         s.llms_status_file.unlink()
 
 
 def remove_source(domain: str, s: Settings) -> KnownSource:
-    """Удалить пользовательский источник; встроенный удалить нельзя.
+    """Remove a user source; a built-in one can't be removed.
 
     Raises:
-        UserError: источник встроенный или его нет.
-        OSError: файл источников не записался.
+        UserError: the source is built-in or doesn't exist.
+        OSError: the sources file couldn't be written.
     """
     found = find_source(domain, s)
     if found is None:
-        raise UserError(f"источника {domain!r} нет")
+        raise UserError(f"no such source {domain!r}")
     if found.default:
-        raise UserError(f"источник {domain!r} встроенный, удалить нельзя")
+        raise UserError(f"source {domain!r} is built-in and can't be removed")
     _save_sources([i for i in custom_sources(s) if i.domain != found.domain], s)
     _forget_status(s)
     return found
 
 
 def index_url(source: str, s: Settings) -> str:
-    """Адрес индекса: из реестра по домену, иначе из того, что назвал клиент.
+    """Index address: from the registry by domain, otherwise from whatever the caller named.
 
-    Клиент может назвать домен (`docs.astral.sh/uv`), домен с путём или адрес
-    файла целиком.
+    The caller may name a domain (`docs.astral.sh/uv`), a domain with a path,
+    or a full file address.
     """
     if (known := find_source(source, s)) is not None:
         return known.index
@@ -237,7 +241,7 @@ def index_url(source: str, s: Settings) -> str:
 
 
 def domain_of(url: str, s: Settings) -> str:
-    """Имя источника для ответов: домен из реестра или хост адреса."""
+    """Source name for responses: registry domain, or the address's host."""
     if (known := find_source(url, s)) is not None:
         return known.domain
     return urlsplit(url).hostname or url
@@ -251,7 +255,7 @@ def _cache_paths(method: str, url: str, s: Settings) -> tuple[Path, Path]:
 
 
 def _cached(method: str, url: str, s: Settings) -> Fetched | None:
-    """Прочитать из кэша, если запись есть и не старше TTL; иначе None."""
+    """Read from the cache if an entry exists and isn't older than the TTL; otherwise None."""
     body_path, meta_path = _cache_paths(method, url, s)
     try:
         if time() - meta_path.stat().st_mtime > s.llms_cache_ttl:
@@ -262,7 +266,7 @@ def _cached(method: str, url: str, s: Settings) -> Fetched | None:
 
 
 def _store(method: str, url: str, fetched: Fetched, s: Settings) -> None:
-    """Положить в кэш; тело раньше меты, чтобы свежая мета не указала на старое тело."""
+    """Write to the cache; body before meta, so fresh meta never points at a stale body."""
     body_path, meta_path = _cache_paths(method, url, s)
     with contextlib.suppress(OSError):
         store.write_bytes(body_path, fetched.body)
@@ -270,11 +274,11 @@ def _store(method: str, url: str, fetched: Fetched, s: Settings) -> None:
 
 
 def parse_index(text: str, base_url: str) -> LlmsIndex:
-    """Разобрать `llms.txt`: заголовок, аннотация, ссылки по разделам.
+    """Parse an `llms.txt`: title, summary, links grouped by section.
 
-    Формат: `# Заголовок`, `> аннотация`, `## Раздел`, строки `- [имя](url):
-    описание`. Относительные адреса раскрываются от `base_url`. Варианты
-    файлов здесь не проверяются — это сеть, см. `Session.variants`.
+    Format: `# Title`, `> summary`, `## Section`, lines `- [name](url):
+    description`. Relative addresses are resolved against `base_url`. File
+    variants aren't checked here — that's network I/O, see `Session.variants`.
     """
     title = summary = section = full_url = ""
     entries: list[IndexEntry] = []
@@ -297,14 +301,15 @@ def parse_index(text: str, base_url: str) -> LlmsIndex:
 
 
 def sections(text: str) -> list[tuple[str, str]]:
-    """Разрезать markdown по заголовкам до третьего уровня.
+    """Split markdown by headings up to level three.
 
-    Строки `# …` внутри огороженного кода (``` или ~~~) заголовками не считаются:
-    иначе комментарий в примере на bash резал бы раздел пополам.
+    `# …` lines inside a fenced code block (``` or ~~~) don't count as
+    headings: otherwise a comment in a bash example would split a section in
+    half.
 
     Returns:
-        Пары (заголовок, текст раздела с заголовком); текст до первого
-        заголовка идёт разделом с пустым заголовком.
+        Pairs of (heading, section text including the heading); text before
+        the first heading forms a section with an empty heading.
     """
     starts: list[int] = []
     fenced = False
@@ -332,16 +337,16 @@ def _matches(text: str, words: list[str]) -> bool:
 
 
 def matching_sections(text: str, words: list[str], limit: int) -> list[tuple[str, str, bool]]:
-    """Разделы, где есть все слова: заголовок, фрагмент до `limit` символов, обрезан ли.
+    """Sections containing all the words: heading, excerpt up to `limit` characters, whether trimmed.
 
-    Чистая функция для потока: на full-файле в десятки мегабайт разрез и поиск
-    заняли бы цикл событий на секунды.
+    A pure function for use in a thread: on a full file of tens of megabytes,
+    splitting and searching would tie up the event loop for seconds.
     """
     return [(heading, chunk[:limit], len(chunk) > limit) for heading, chunk in sections(text) if _matches(chunk, words)]
 
 
 class Session:
-    """Один вызов инструмента: настройки и HTTP-клиент с общим пулом соединений."""
+    """One tool call: settings plus an HTTP client with a shared connection pool."""
 
     def __init__(self, s: Settings | None = None) -> None:
         self.s = s or get_settings()
@@ -349,38 +354,39 @@ class Session:
         self._public: set[str] = set()
 
     async def __aenter__(self) -> Self:
-        """Открыть пул соединений."""
+        """Open the connection pool."""
         await self._client.__aenter__()
         return self
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
-        """Закрыть пул соединений."""
+        """Close the connection pool."""
         await self._client.aclose()
 
     async def _guard(self, request: httpx2.Request) -> None:
-        """Проверить адрес перед отправкой каждого запроса, включая переадресацию."""
+        """Check the address before sending every request, including redirects."""
         host = check_url(str(request.url))
         if host not in self._public:
             await resolve_public(host)
             self._public.add(host)
 
     async def fetch(self, url: str, method: str = "GET", *, cache: bool = True) -> Fetched:
-        """Скачать ресурс с кэшем и потолком размера.
+        """Download a resource, with caching and a size cap.
 
-        Код ответа возвращается, а не превращается в ошибку: проверке домена
-        нужен и 404. HEAD тела не тянет — им проверяется наличие файлов.
-        `cache=False` минует кэш на диске: так проверяют, что источник жив
-        сейчас. Адрес и каждый ход переадресации проверяет `_guard` до отправки.
+        The response status is returned rather than turned into an error:
+        the domain check needs 404 too. HEAD doesn't pull the body: it's used
+        to check whether files exist. `cache=False` bypasses the on-disk
+        cache: that's how liveness is checked right now. The address and every
+        redirect hop is checked by `_guard` before it's sent.
 
         Raises:
-            UserError: адрес не https или непубличный, сеть недоступна, таймаут,
-                слишком длинная цепочка переадресаций или тело больше
-                `llms_max_bytes`.
+            UserError: address isn't https or is non-public, the network is
+                unreachable, a timeout occurs, the redirect chain is too long,
+                or the body exceeds `llms_max_bytes`.
         """
         s = self.s
-        check_url(url)  # в кэш такой адрес не попал бы, но проверка дешевле спора об этом
+        check_url(url)  # such an address wouldn't be in the cache anyway, but checking is cheaper than arguing about it
         if cache and (hit := await anyio.to_thread.run_sync(_cached, method, url, s)) is not None:
             return hit
         body = bytearray()
@@ -389,7 +395,7 @@ class Session:
                 async for chunk in response.aiter_bytes():
                     body += chunk
                     if len(body) > s.llms_max_bytes:
-                        raise UserError(f"{url}: больше потолка {s.llms_max_bytes} байт")
+                        raise UserError(f"{url}: exceeds the cap of {s.llms_max_bytes} bytes")
                 length = response.headers.get("content-length")
                 fetched = Fetched(
                     status=response.status_code,
@@ -398,38 +404,41 @@ class Session:
                     body=bytes(body),
                 )
         except httpx2.HTTPError as err:
-            raise UserError(f"не удалось скачать {url}: {err}") from err
-        log.debug("%s %s -> %s, %d байт", method, url, fetched.status, len(fetched.body))
+            raise UserError(f"failed to download {url}: {err}") from err
+        log.debug("%s %s -> %s, %d bytes", method, url, fetched.status, len(fetched.body))
         if cache and fetched.cacheable:
             await anyio.to_thread.run_sync(_store, method, url, fetched, s)
         return fetched
 
     async def is_stub(self, url: str, *, cache: bool) -> bool:
-        """Отвечает ли домен успехом на мусорный путь рядом с `url` (HEAD)."""
+        """Whether the domain returns success for a junk path next to `url` (HEAD)."""
         junk = await self.fetch(urljoin(url, LLMS_JUNK_NAME), "HEAD", cache=cache)
         return junk.ok
 
     async def fetch_ok(self, url: str) -> Fetched:
-        """Скачать документ; неуспешный код или SPA-заглушка — ошибка вызова.
+        """Download a document; a failed status or an SPA stub is a call error.
 
-        HTML в ответе сам по себе не приговор: честный домен может отдать HTML
-        страницу. Приговор — HTML плюс успешный ответ на мусорный путь рядом.
+        HTML in the response isn't a verdict by itself: an honest domain can
+        return an HTML page. The verdict is HTML plus a successful response on
+        a junk path next to it.
 
         Raises:
-            UserError: ошибка сети, код ответа не 2xx/3xx или SPA-заглушка.
+            UserError: network error, response status isn't 2xx/3xx, or an
+                SPA stub.
         """
         fetched = await self.fetch(url)
         if not fetched.ok:
             raise UserError(f"{url}: HTTP {fetched.status}")
         if fetched.is_html and await self.is_stub(url, cache=True):
-            raise UserError(f"{url}: пришла HTML-оболочка, а домен отвечает успехом на любой путь — это SPA-заглушка")
+            raise UserError(f"{url}: got an HTML shell, and the domain returns success for any path — an SPA stub")
         return fetched
 
     async def variants(self, index: str) -> list[Variant]:
-        """Какие из `LLMS_VARIANTS` лежат рядом с индексом (по HEAD, параллельно).
+        """Which of `LLMS_VARIANTS` exist next to the index (via HEAD, in parallel).
 
-        Домен, отвечающий 200 на всё, отдаёт на отсутствующий файл HTML-оболочку,
-        поэтому «есть» — это успешный код и не HTML в типе содержимого.
+        A domain that returns 200 for anything serves an HTML shell for a
+        missing file, so "exists" means a successful status and a
+        non-HTML content type.
         """
 
         async def probe(name: str) -> Variant | None:
@@ -444,18 +453,18 @@ class Session:
         return [found for found in await gather(probe, LLMS_VARIANTS) if found is not None]
 
     async def index(self, source: str) -> LlmsIndex:
-        """Индекс источника без вариантов: скачать и разобрать."""
+        """A source's index without variants: download and parse."""
         url = index_url(source, self.s)
         return parse_index((await self.fetch_ok(url)).text, url)
 
     async def load_index(self, source: str) -> LlmsIndex:
-        """Индекс источника вместе с вариантами файлов рядом."""
+        """A source's index together with the file variants next to it."""
         index = await self.index(source)
         index.variants = await self.variants(index.url)
         return index
 
     async def check(self, known: KnownSource) -> SourceStatus:
-        """Жив ли источник сейчас: HEAD индекса мимо кэша, при HTML — мусорная проба."""
+        """Whether a source is alive right now: HEAD on the index bypassing the cache, plus a junk probe on HTML."""
         state: SourceState = "ok"
         detail = ""
         try:
@@ -464,24 +473,24 @@ class Session:
                 state, detail = "unavailable", f"HTTP {head.status}"
             elif head.is_html:
                 state = "stub" if await self.is_stub(known.index, cache=False) else "unavailable"
-                detail = "вместо индекса HTML-оболочка"
+                detail = "HTML shell instead of the index"
         except UserError as err:
             state, detail = "unavailable", str(err)
         return SourceStatus(**known.model_dump(), state=state, detail=detail)
 
     async def verify_sources(self, *, refresh: bool = False) -> SourcesResult:
-        """Все источники с итогом проверки; итоги лежат в runtime-каталоге до TTL.
+        """All sources with their check outcome; outcomes live in the runtime dir until the TTL expires.
 
-        Runtime-каталог живёт до перезагрузки машины, но переживает перезапуск
-        сервера: между сессиями источники заново не опрашиваются. Опрашиваются
-        все разом, мимо кэша скачивания.
+        The runtime dir lives until the machine reboots but survives a server
+        restart: sources aren't re-polled across sessions. All of them are
+        polled at once, bypassing the download cache.
         """
         s = self.s
         known = all_sources(s)
         age, saved = store.load_stamped(s.llms_status_file)
         if not refresh and age < s.llms_status_ttl:
-            # Сохранённое могло быть записано другим составом реестра или
-            # испорчено: тогда проверяем заново, а не падаем.
+            # The saved data might have been written by a different registry
+            # composition, or be corrupt: re-check instead of failing.
             with contextlib.suppress(KeyError, ValidationError):
                 rows = _VERDICTS.validate_python(saved.get("sources"))
                 statuses = [SourceStatus(**item.model_dump(), **rows[item.domain].model_dump()) for item in known]
@@ -495,7 +504,7 @@ class Session:
         return SourcesResult(checked_ago=0.0, sources=statuses, variants=list(LLMS_VARIANTS))
 
     async def _full_size(self, index_url: str) -> int | None:
-        """Размер `llms-full.txt` рядом с индексом (один HEAD); None — файла нет."""
+        """Size of `llms-full.txt` next to the index (a single HEAD); None means no such file."""
         try:
             head = await self.fetch(urljoin(index_url, LLMS_FULL_NAME), "HEAD")
         except UserError:
@@ -503,23 +512,24 @@ class Session:
         return head.content_length if head.ok and not head.is_html else None
 
     async def add_source(self, domain: str, covers: str, index: str | None) -> SourceStatus:
-        """Проверить источник по сети, добавить в пользовательский файл и вернуть.
+        """Check a source over the network, add it to the user file, and return it.
 
-        Индекс скачивается целиком: он должен быть текстом с хотя бы одной
-        ссылкой. Размер `llms-full.txt` рядом узнаётся одним HEAD; остальные
-        варианты (small, ctx…) не пробуются — их показывает llms_index.
+        The index is downloaded in full: it must be text with at least one
+        link. The size of `llms-full.txt` next to it is found with a single
+        HEAD; other variants (small, ctx…) aren't probed — llms_index shows
+        those.
 
         Raises:
-            UserError: домен уже есть, индекса нет, это заглушка или в нём нет
-                ссылок.
-            OSError: файл источников не записался.
+            UserError: domain already exists, there's no index, it's a stub,
+                or it has no links.
+            OSError: the sources file couldn't be written.
         """
         s = self.s
         if find_source(domain, s) is not None:
-            raise UserError(f"источник {domain!r} уже есть")
+            raise UserError(f"source {domain!r} already exists")
         parsed = await self.index(index or domain)
         if not parsed.entries:
-            raise UserError(f"{parsed.url}: в индексе нет ни одной ссылки — это не llms.txt")
+            raise UserError(f"{parsed.url}: index has no links at all — this isn't an llms.txt")
         known = KnownSource(domain=domain, index=parsed.url, covers=covers, full_size=await self._full_size(parsed.url))
         _save_sources([*custom_sources(s), known], s)
         _forget_status(s)
@@ -544,21 +554,21 @@ class Session:
         ]
 
     async def search(self, query: str, source: str | None, scope: SearchScope) -> SearchResult:
-        """Найти слова запроса (все, без учёта регистра).
+        """Find the query words (all of them, case-insensitive).
 
-        Без `source` — по оглавлениям всех источников реестра, которые последняя
-        проверка признала живыми, параллельно; остальные и упавшие по пути
-        называются в `skipped`.
+        Without `source` — over the tables of contents of every registry
+        source that the last check found alive, in parallel; the rest, and
+        any that fail along the way, are listed in `skipped`.
 
         Raises:
-            UserError: пустой запрос, `full` без источника, либо названный
-                источник нечестный или без файла.
+            UserError: empty query, `full` without a source, or the named
+                source is dishonest or has no file.
         """
         words = query.lower().split()
         if not words:
-            raise UserError("пустой запрос")
+            raise UserError("empty query")
         if source is None and scope == "full":
-            raise UserError("поиск по full — только с указанным источником")
+            raise UserError("searching full requires a specified source")
 
         async def one(target: str) -> list[SearchHit]:
             index = await self.index(target)
@@ -599,14 +609,15 @@ class Session:
         )
 
     async def fetch_page(self, url: str, offset: int) -> Page:
-        """Страница по адресу из индекса, кусок с `offset` длиной `llms_page_chars`.
+        """A page by its index address, a chunk of `llms_page_chars` starting at `offset`.
 
         Raises:
-            UserError: это `llms-full.txt` (он читается только поиском), домен
-                нечестный, страницы нет или сеть недоступна.
+            UserError: it's `llms-full.txt` (read only via search), the domain
+                is dishonest, the page doesn't exist, or the network is
+                unreachable.
         """
         if urlsplit(url).path.rsplit("/", 1)[-1] == LLMS_FULL_NAME:
-            raise UserError(f"{url}: {LLMS_FULL_NAME} целиком не отдаётся — llms_search со scope=full")
+            raise UserError(f"{url}: {LLMS_FULL_NAME} isn't served in full — use llms_search with scope=full")
         fetched = await self.fetch_ok(url)
         text = fetched.text
         end = offset + self.s.llms_page_chars

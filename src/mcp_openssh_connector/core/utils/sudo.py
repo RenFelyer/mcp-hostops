@@ -1,16 +1,17 @@
-"""Разбор sudo в команде, чтение пароля и его маскировка.
+"""Detecting sudo in a command, reading the password, and masking it.
 
-Пароль хоста лежит в `~/.ssh/<alias>.secret` (права 0600, наш файл) и читается
-только в момент вызова, не кэшируется. Если в команде есть sudo, сервер шлёт
-пароль первой строкой stdin, а удалённый скрипт (`ssh.remote_script`) отдаёт
-эту строку одному вызову `sudo -v`, который кладёт тикет в кэш; дальше исходная
-команда идёт без изменений, а её sudo берут тикет уже без запроса. В любом
-выводе строка, равная паролю, заменяется на `***`.
+The host password lives in `~/.ssh/<alias>.secret` (mode 0600, our file) and
+is read only at call time, never cached. If the command contains sudo, the
+server sends the password as the first stdin line, and the remote script
+(`ssh.remote_script`) feeds that line to a single `sudo -v` call, which caches
+a ticket; the original command then runs unchanged, and its sudo invocations
+pick up the ticket without prompting. In any output, a line equal to the
+password is replaced with `***`.
 
-Разбор команды — эвристика для режима «решить по команде»: ищем sudo/doas в
-позиции глагола, в том числе за обёртками вроде `env` или `timeout` и внутри
-`sh -c '…'`. Подстановки `$(…)` и обратные кавычки не разбираются — там sudo
-задаётся явно через параметр `sudo`.
+Command parsing is a heuristic for the "decide from the command" mode: we look
+for sudo/doas in the verb position, including behind wrappers like `env` or
+`timeout` and inside `sh -c '…'`. `$(…)` substitutions and backticks are not
+parsed — there, sudo is specified explicitly via the `sudo` parameter.
 """
 
 import os
@@ -26,7 +27,7 @@ from ..schemas import SudoMode
 
 
 class SudoError(UserError):
-    """Пароль для sudo недоступен: файла нет или у него небезопасные права."""
+    """The sudo password is unavailable: the file is missing or has unsafe permissions."""
 
 
 def _is_assignment(token: str) -> bool:
@@ -35,7 +36,7 @@ def _is_assignment(token: str) -> bool:
 
 
 def _split(text: str) -> list[str]:
-    """Токены по правилам оболочки; при кривых кавычках — по пробелам."""
+    """Tokens per shell rules; on malformed quoting, split on whitespace."""
     try:
         return shlex.split(text, comments=False)
     except ValueError:
@@ -43,10 +44,10 @@ def _split(text: str) -> list[str]:
 
 
 def _simple_commands(script: str) -> Iterator[str]:
-    """Простые команды скрипта: разрез по `;`, `&&`, `||`, `|`, `&` вне кавычек.
+    """The script's simple commands: split on `;`, `&&`, `||`, `|`, `&` outside quotes.
 
-    Одиночный `&` — тоже разделитель (фоновая команда), кроме перенаправлений
-    `>&`, `<&` и `&>`.
+    A lone `&` is also a separator (background command), except in the
+    redirections `>&`, `<&`, and `&>`.
     """
     quote = ""
     start = 0
@@ -81,7 +82,7 @@ def _basename(token: str) -> str:
 
 
 def _verb(tokens: list[str]) -> tuple[str, list[str]]:
-    """Глагол и его аргументы после снятия присваиваний и обёрток."""
+    """The verb and its arguments after stripping assignments and wrappers."""
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -100,10 +101,9 @@ def _verb(tokens: list[str]) -> tuple[str, list[str]]:
 
 
 def _inline_code(args: list[str]) -> str | None:
-    """Код после `-c` у оболочки; флаг может быть склеен (`-lc`, `-xec`).
+    """The code after a shell's `-c`; the flag may be fused (`-lc`, `-xec`).
 
-    `-o` берёт отдельное значение (`bash -o pipefail -c '…'`), остальные флаги
-    без него.
+    `-o` takes a separate value (`bash -o pipefail -c '…'`); other flags don't.
     """
     i = 0
     while i < len(args) and args[i].startswith("-"):
@@ -118,7 +118,7 @@ def _inline_code(args: list[str]) -> str | None:
 
 
 def uses_sudo(command: str) -> bool:
-    """Есть ли sudo/doas в позиции глагола, в том числе внутри `<shell> -c '…'`."""
+    """Whether sudo/doas appears in the verb position, including inside `<shell> -c '…'`."""
     for simple in _simple_commands(command):
         verb, args = _verb(_split(simple))
         if verb in ("sudo", "doas"):
@@ -129,43 +129,45 @@ def uses_sudo(command: str) -> bool:
 
 
 def decide_prime(command: str, sudo_mode: SudoMode) -> bool:
-    """Нужен ли прайминг пароля: auto решает по команде, true/false — принудительно."""
+    """Whether password priming is needed: auto decides from the command, true/false force it."""
     if sudo_mode == "auto":
         return uses_sudo(command)
     return sudo_mode == "true"
 
 
 def read_secret(alias: str, s: Settings) -> str:
-    """Пароль из `~/.ssh/<alias>.secret`.
+    """The password from `~/.ssh/<alias>.secret`.
 
-    В сообщение об ошибке попадает только путь, но не содержимое.
+    Only the path, never the content, goes into the error message.
 
     Raises:
-        SudoError: алиас выводит путь за пределы каталога секретов, файла нет
-            или он не читается, это не обычный наш файл или права не 0600.
+        SudoError: the alias leads the path outside the secrets directory, the
+            file doesn't exist or can't be read, it isn't our regular file, or
+            its permissions aren't 0600.
     """
     path: Path = s.secret_file(alias)
-    # Алиас с `/` или `..` увёл бы путь из каталога секретов; сравнение без
-    # обращения к диску, так что своя ссылка на файл в другом месте допустима.
+    # An alias containing `/` or `..` would move the path out of the secrets
+    # directory; the comparison doesn't touch disk, so our own symlink to a
+    # file elsewhere is fine.
     if path.parent != s.secret_dir:
-        raise SudoError(f"алиас ведёт за пределы каталога секретов: {alias!r}")
+        raise SudoError(f"alias leads outside the secrets directory: {alias!r}")
     try:
         info = path.stat()
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-            raise SudoError(f"файл с паролем должен быть нашим обычным файлом: {path}")
+            raise SudoError(f"the password file must be our own regular file: {path}")
         if info.st_mode & 0o077:
-            raise SudoError(f"у файла с паролем небезопасные права, нужно 0600: {path}")
+            raise SudoError(f"the password file has unsafe permissions, must be 0600: {path}")
         return path.read_text(encoding="utf-8").rstrip("\r\n")
     except OSError as err:
-        raise SudoError(f"нет файла с паролем: {path} ({err.strerror})") from err
+        raise SudoError(f"password file not found: {path} ({err.strerror})") from err
 
 
 def mask(text: str, password: str | None) -> str:
-    """Заменить строки, состоящие ровно из пароля, на `***`.
+    """Replace lines that consist exactly of the password with `***`.
 
-    Пароль утекает в вывод только эхом pty (отдельной строкой), поэтому маскируем
-    построчно, а не подстрокой: иначе короткий пароль-подстрока (например `root`)
-    испортил бы обычный вывод.
+    The password can only leak into output as pty echo (its own line), so we
+    mask line by line rather than by substring: otherwise a short
+    password-as-substring (e.g. `root`) would corrupt normal output.
     """
     if not password:
         return text

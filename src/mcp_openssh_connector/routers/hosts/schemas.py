@@ -1,4 +1,4 @@
-"""Схемы ответов роутера хостов."""
+"""Hosts router response schemas."""
 
 from pydantic import BaseModel, Field
 
@@ -6,20 +6,20 @@ from ...core.schemas import Availability, Checked, Host
 
 
 class HostStatus(Host):
-    """Хост с последней известной доступностью."""
+    """Host with its last known availability."""
 
     status: Availability
 
 
 class ListHostsResult(Checked):
-    """Ответ `list_hosts`."""
+    """Response of `list_hosts`."""
 
     hosts: list[HostStatus]
 
 
 class CheckResult(BaseModel):
-    """Одна строка ответа `check_hosts`."""
+    """One row of the `check_hosts` response."""
 
     alias: str
     status: Availability
-    detail: str = Field(description="причина отказа входа при deep или пояснение к unknown; иначе пусто")
+    detail: str = Field(description="login failure reason for deep, or a note on unknown; empty otherwise")

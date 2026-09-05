@@ -1,1 +1,1 @@
-"""Общий низ: настройки, схемы, кэш, сборка сервера и утилиты."""
+"""Shared foundation: settings, schemas, cache, server assembly, and utilities."""

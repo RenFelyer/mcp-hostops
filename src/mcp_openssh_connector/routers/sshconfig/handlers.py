@@ -1,8 +1,8 @@
-"""Обработчики роутера управления ~/.ssh/config: add_host, remove_host, forget_host, copy_id.
+"""Handlers of the ~/.ssh/config management router: add_host, remove_host, forget_host, copy_id.
 
-Сервисы синхронные (файлы, ssh -G, ssh-keygen, ssh-copy-id) — обработчики уводят
-их в поток. Подсказки клиенту у каждого инструмента свои: все правят локальные
-файлы (кроме copy_id, который ещё и ходит на хост), поэтому общих пресетов тут нет.
+Services are synchronous (files, ssh -G, ssh-keygen, ssh-copy-id) — handlers move
+them to a thread. Client hints differ per tool: all of them edit local files
+(except copy_id, which also connects to the host), so there are no shared presets here.
 """
 
 from typing import Annotated
@@ -20,10 +20,10 @@ router: FastMCP = FastMCP(name="sshconfig", on_duplicate="error")
 
 
 @router.tool(
-    title="Добавить хост",
+    title="Add host",
     tags={"sshconfig"},
-    # Пишет Host-блок в managed-файл (и один раз Include в конфиг); в сеть не
-    # ходит (ssh -G локален). Повтор с теми же полями даёт то же состояние.
+    # Writes a Host block to the managed file (and Include to the config, once);
+    # no network access (ssh -G is local). Repeating with the same fields yields the same state.
     annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
     ),
@@ -37,20 +37,20 @@ async def add_host(
     proxy_jump: str = "",
     extra: dict[str, str] | None = None,
 ) -> AddHostResult:
-    """Добавить хост в ~/.ssh/config через managed-файл сервера.
+    """Add a host to ~/.ssh/config via the server's managed file.
 
-    Блок пишется в каноническом виде в отдельный файл, подключённый к основному
-    конфигу через Include; ручной конфиг не переписывается. Существующий
-    managed-блок того же алиаса заменяется; алиас, описанный вручную, занят.
+    The block is written in canonical form to a separate file, wired into the
+    main config via Include; the manual config is not rewritten. An existing
+    managed block for the same alias is replaced; an alias described manually is taken.
 
     Args:
-        alias: Имя хоста для ssh (`ssh <alias>`); без пробелов и без * ? # !.
-        hostname: Адрес или доменное имя хоста (HostName).
-        user: Пользователь входа; пусто — не писать User.
-        port: Порт ssh.
-        identity_file: Путь к приватному ключу (IdentityFile); пусто — не писать.
-        proxy_jump: Алиас jump-хоста (ProxyJump); пусто — прямой вход.
-        extra: Прочие опции ssh как «Ключ: Значение», пишутся в блок как есть.
+        alias: Host name for ssh (`ssh <alias>`); no spaces and no * ? # !.
+        hostname: Host address or domain name (HostName).
+        user: Login user; empty — don't write User.
+        port: ssh port.
+        identity_file: Path to the private key (IdentityFile); empty — don't write it.
+        proxy_jump: Alias of the jump host (ProxyJump); empty — direct connection.
+        extra: Other ssh options as "Key: Value", written into the block as-is.
     """
     spec = ManagedHost(
         alias=alias,
@@ -65,66 +65,66 @@ async def add_host(
 
 
 @router.tool(
-    title="Удалить хост",
+    title="Remove host",
     tags={"sshconfig"},
-    # Убирает managed-блок и, по флагам, записи known_hosts и секрет; повторный
-    # вызов уже не найдёт хост и завершится ошибкой — потому не idempotent.
+    # Removes the managed block and, per flags, known_hosts entries and the secret;
+    # a repeat call won't find the host and will fail — hence not idempotent.
     annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False
     ),
 )
 async def remove_host(alias: NonEmptyStr, forget_known: bool = True, drop_secret: bool = False) -> RemoveHostResult:
-    """Удалить хост из managed-файла и подчистить его след.
+    """Remove a host from the managed file and clean up its trace.
 
-    Трогает только записи, добавленные сервером: хост из ручного конфига —
-    ошибка. По умолчанию заодно чистит known_hosts.
+    Touches only entries added by the server: a host from the manual config is
+    an error. By default also cleans known_hosts.
 
     Args:
-        alias: Алиас, добавленный ранее add_host.
-        forget_known: Удалить и записи этого хоста из known_hosts.
-        drop_secret: Удалить и файл ~/.ssh/<alias>.secret с паролем sudo.
+        alias: Alias previously added by add_host.
+        forget_known: Also remove this host's entries from known_hosts.
+        drop_secret: Also remove the ~/.ssh/<alias>.secret file with the sudo password.
     """
     return await anyio.to_thread.run_sync(services.remove_host, alias, forget_known, drop_secret)
 
 
 @router.tool(
-    title="Забыть ключ хоста",
+    title="Forget host key",
     tags={"sshconfig"},
-    # Чистит только known_hosts; конфиг не трогает. Повтор ничего не меняет.
+    # Cleans only known_hosts; doesn't touch the config. Repeating changes nothing.
     annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
     ),
 )
 async def forget_host(target: NonEmptyStr) -> ForgetHostResult:
-    """Удалить записи known_hosts для хоста, не трогая конфиг.
+    """Remove known_hosts entries for a host without touching the config.
 
-    Для случая «Remote host identification has changed»: следующий вход примет
-    новый ключ. Конфиг и секреты остаются на месте.
+    For the "Remote host identification has changed" case: the next connection
+    will accept the new key. The config and secrets are left in place.
 
     Args:
-        target: Алиас из конфига (чистится его hostname) или сам hostname/IP.
+        target: Alias from the config (its hostname is cleaned) or the hostname/IP itself.
     """
     return await anyio.to_thread.run_sync(services.forget_host, target)
 
 
 @router.tool(
-    title="Раздать ключ хосту",
+    title="Install key on host",
     tags={"sshconfig"},
-    # Ходит на хост и правит его authorized_keys; ssh-copy-id повторно уже
-    # установленный ключ пропускает, так что повтор безопасен.
+    # Connects to the host and edits its authorized_keys; ssh-copy-id skips a key
+    # that's already installed, so repeating is safe.
     annotations=ToolAnnotations(
         read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=True
     ),
 )
 async def copy_id(alias: NonEmptyStr, identity: str = "") -> CopyIdResult:
-    """Установить публичный ключ на хост (ssh-copy-id), пароль — из секрета.
+    """Install a public key on the host (ssh-copy-id); the password comes from the secret.
 
-    Пароль берётся из ~/.ssh/<alias>.secret и отдаётся хосту через sshpass, не
-    попадая в argv или лог; нужны установленные ssh-copy-id и sshpass. После
-    этого вход идёт по ключу, а sudo — с тем же секретом.
+    The password is taken from ~/.ssh/<alias>.secret and passed to the host via
+    sshpass, without landing in argv or logs; ssh-copy-id and sshpass must be
+    installed. After this, login proceeds by key, and sudo uses the same secret.
 
     Args:
-        alias: Алиас из ~/.ssh/config.
-        identity: Путь к публичному ключу (-i); пусто — ключ по умолчанию.
+        alias: Alias from ~/.ssh/config.
+        identity: Path to the public key (-i); empty — the default key.
     """
     return await anyio.to_thread.run_sync(services.copy_id, alias, identity)

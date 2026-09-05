@@ -1,4 +1,4 @@
-"""run_command: вывод при таймауте сохраняется, потолок таймаута — ошибка вызова."""
+"""run_command: output on timeout is preserved, timeout cap is a call error."""
 
 from collections.abc import Iterator, Sequence
 from pathlib import Path
@@ -15,7 +15,7 @@ from mcp_openssh_connector.routers.commands.schemas import RunResult
 
 
 class _FakeReceive:
-    """Поток: отдаёт куски, потом EOF либо зависает (симуляция зависшей команды)."""
+    """Stream: yields chunks, then EOF or hangs (simulates a hung command)."""
 
     def __init__(self, chunks: Sequence[bytes], *, hang: bool) -> None:
         self._chunks = list(chunks)
@@ -41,7 +41,7 @@ class _FakeSend:
 
 
 class _FakeProcess:
-    """Минимальный процесс: печатает строку в stdout и зависает, пока его не убьют."""
+    """Minimal process: prints a line to stdout and hangs until killed."""
 
     def __init__(self) -> None:
         self.stdin = _FakeSend()
@@ -74,7 +74,7 @@ class _FakeProcess:
 
 @pytest.fixture
 def fake_ssh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
-    """Процесс и хост подменены; runtime-каталог — временный, настройки заново."""
+    """Process and host are faked; runtime dir is temporary, settings reloaded."""
 
     async def fake_open(_argv: list[str]) -> _FakeProcess:
         return _FakeProcess()
@@ -98,7 +98,7 @@ def test_run_command_keeps_output_on_timeout() -> None:
     result = anyio.run(scenario)
     assert result.timed_out is True
     assert result.exit_code is None
-    assert "partial-output" in result.stdout  # вывод до таймаута не потерян
+    assert "partial-output" in result.stdout  # output before the timeout is not lost
 
 
 @pytest.mark.usefixtures("fake_ssh")
@@ -106,5 +106,5 @@ def test_run_command_rejects_timeout_above_cap() -> None:
     async def scenario() -> RunResult:
         return await services.run_command("h", "true", "~", 1e9, "false", None)
 
-    with pytest.raises(UserError, match="потолка"):
+    with pytest.raises(UserError, match="cap"):
         anyio.run(scenario)

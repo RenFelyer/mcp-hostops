@@ -1,9 +1,9 @@
-"""Сборка сервера: набор инструментов, их описания и параметры — как задумано.
+"""Server assembly: the tool set, their descriptions and parameters — as intended.
 
-fastmcp берёт описание инструмента из текста докстринга до `Args`, а описания
-параметров — из самой секции `Args`; между роутерами совпадение имён он не
-считает ошибкой и берёт первое. Всё это проверяется здесь, чтобы регресс в
-докстринге или новый роутер не прошли незамеченными.
+fastmcp takes a tool's description from the docstring text before `Args`, and parameter
+descriptions from the `Args` section itself; across routers it doesn't treat a name
+collision as an error and just takes the first one. All of this is checked here so that a
+regression in a docstring or a new router doesn't go unnoticed.
 """
 
 import ast
@@ -61,8 +61,8 @@ def test_every_tool_documented_and_annotated() -> None:
         assert tool.description, tool.name
         assert tool.title, tool.name
         assert tool.annotations is not None, tool.name
-        # Все четыре подсказки выставлены явно: дефолты MCP (destructive=true,
-        # open_world=true) для наших инструментов почти всегда неверны.
+        # All four hints are set explicitly: the MCP defaults (destructive=true,
+        # open_world=true) are almost always wrong for our tools.
         for hint in ("read_only_hint", "destructive_hint", "idempotent_hint", "open_world_hint"):
             assert getattr(tool.annotations, hint) is not None, f"{tool.name}.{hint}"
         for name, prop in tool.input_schema.get("properties", {}).items():
@@ -82,13 +82,13 @@ def test_run_and_start_defaults() -> None:
 
 
 def test_router_layout() -> None:
-    # В роутере только schemas, handlers и services; роутеры друг о друге не знают.
+    # A router only has schemas, handlers, and services; routers don't know about each other.
     root = Path(routers.__file__).parent
     allowed = {"__init__.py", "handlers.py", "schemas.py", "services.py"}
     for package in (p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")):
         assert {f.name for f in package.glob("*.py")} <= allowed, package.name
         for module in package.glob("*.py"):
-            # `from ..x` — сосед-роутер; допустимы только `.` (свой) и `...core`.
+            # `from ..x` is a sibling router; only `.` (own) and `...core` are allowed.
             assert not re.search(r"^from \.\.(?!\.)", module.read_text(), re.MULTILINE), module
 
 
@@ -98,7 +98,7 @@ def _sources() -> list[Path]:
 
 
 def test_no_any_or_object_in_code() -> None:
-    # `Any` и `object` в коде запрещены: JSON — `Json`, остальное — точный тип.
+    # `Any` and `object` are banned in code: JSON uses `pydantic.JsonValue`, everything else needs an exact type.
     for path in _sources():
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Name):
@@ -108,7 +108,7 @@ def test_no_any_or_object_in_code() -> None:
 
 
 def test_no_lint_suppressions_in_code() -> None:
-    # Правило либо выполняется, либо отключается в pyproject с причиной.
+    # A rule is either followed, or disabled in pyproject with a reason.
     banned = ("noqa", "type: ignore", "fmt: skip", "fmt: off", "pyright: ignore", "ty: ignore")
     for path in _sources():
         with path.open(encoding="utf-8") as file:

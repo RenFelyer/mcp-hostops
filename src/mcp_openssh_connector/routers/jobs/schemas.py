@@ -1,4 +1,4 @@
-"""Схемы и вокабуляр состояний роутера фоновых задач."""
+"""Background jobs router schemas and status vocabulary."""
 
 from typing import Literal
 
@@ -10,16 +10,16 @@ JobStatus = Literal["running", "done", "killed", "error"]
 
 
 class JobRef(BaseModel):
-    """Задача без вывода: ответ `start` и строка ответа `jobs`."""
+    """Job without output: response of `start` and a row of `jobs`."""
 
     id: str
     host: str
     command: str
     cwd: str
     status: JobStatus = "running"
-    exit_code: int | None = Field(default=None, description="код возврата; null — ещё идёт или снята")
-    error: str = Field(default="", description="причина при status=error; иначе пусто")
+    exit_code: int | None = Field(default=None, description="return code; null — still running or killed")
+    error: str = Field(default="", description="reason when status=error; empty otherwise")
 
 
 class JobSnapshot(JobRef, CapturedOutput):
-    """Ответ `job`: состояние плюс прирост stdout и stderr с прошлого чтения."""
+    """Response of `job`: status plus incremental stdout and stderr since the last read."""

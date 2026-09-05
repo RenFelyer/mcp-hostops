@@ -1,4 +1,4 @@
-"""Обработчик роутера команд: выполнение команды на хосте по ssh."""
+"""Commands router handler: running a command on a host over ssh."""
 
 from typing import Annotated
 
@@ -12,7 +12,7 @@ from .services import run_command
 router: FastMCP = FastMCP(name="commands", on_duplicate="error")
 
 
-@router.tool(title="Команда на хосте", tags={"commands"}, annotations=RUNS_REMOTE)
+@router.tool(title="Command on host", tags={"commands"}, annotations=RUNS_REMOTE)
 async def run(
     host: NonEmptyStr,
     command: NonEmptyStr,
@@ -21,21 +21,22 @@ async def run(
     sudo: SudoMode = "auto",
     stdin: str | None = None,
 ) -> RunResult:
-    """Выполнить команду на хосте и дождаться результата.
+    """Run a command on a host and wait for the result.
 
-    По таймауту локальный ssh убивается (exit_code null, timed_out true) — для
-    долгого используйте start. Пароль sudo берётся из ~/.ssh/<host>.secret и в
-    выводе маскируется.
+    On timeout the local ssh is killed (exit_code null, timed_out true) — use
+    start for long-running commands. The sudo password is taken from
+    ~/.ssh/<host>.secret and masked in the output.
 
     Args:
-        host: Алиас из ~/.ssh/config.
-        command: Команда для оболочки хоста.
-        cwd: Каталог выполнения; по умолчанию домашний. `~` и `~/…`
-            раскрываются, остальное берётся буквально.
-        timeout: Секунды; null — значение по умолчанию из настроек. Больше
-            потолка сервера — ошибка вызова.
-        sudo: auto — решить по команде; true — праймить пароль принудительно;
-            false — не праймить (нужно там, где sudo настроен NOPASSWD).
-        stdin: Текст на stdin команды.
+        host: Alias from ~/.ssh/config.
+        command: Command for the host's shell.
+        cwd: Working directory; defaults to home. `~` and `~/…` are expanded,
+            everything else is taken literally.
+        timeout: Seconds; null — the default from settings. Above the server's
+            cap — a call error.
+        sudo: auto — decide from the command; true — prime the password
+            unconditionally; false — don't prime it (needed where sudo is
+            configured NOPASSWD).
+        stdin: Text for the command's stdin.
     """
     return await run_command(host, command, cwd, timeout, sudo, stdin)

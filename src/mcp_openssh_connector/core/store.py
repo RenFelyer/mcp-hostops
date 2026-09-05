@@ -1,9 +1,9 @@
-"""Файлы состояния и приватные каталоги.
+"""State files and private directories.
 
-Чтение терпимо к мусору: битый файл равен отсутствующему. Запись атомарна —
-через уникальный временный файл в том же каталоге и `replace`, так что два
-сервера, пишущие одновременно, не портят файл друг другу, а читатель никогда не
-видит файл, записанный наполовину.
+Reading tolerates garbage: a corrupt file is treated as absent. Writing is atomic —
+through a unique temporary file in the same directory and `replace`, so two servers
+writing at the same time don't corrupt each other's file, and a reader never sees a
+half-written file.
 """
 
 import json
@@ -14,24 +14,23 @@ from collections.abc import Mapping
 from pathlib import Path
 from time import time
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from .config.constants import PRIVATE_DIR_MODE
-from .schemas import Json
 
-_OBJECT = TypeAdapter(dict[str, Json])
+_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 
 class _Stamped(BaseModel):
-    """Запись с отметкой времени; остальные поля — содержимое."""
+    """A record with a timestamp; the remaining fields are the content."""
 
     model_config = ConfigDict(extra="allow")
 
     checked_at: float
 
 
-def load(path: Path) -> dict[str, Json] | None:
-    """Прочитать JSON-объект; None — файла нет, он битый или это не объект."""
+def load(path: Path) -> dict[str, JsonValue] | None:
+    """Read a JSON object; None means the file is missing, corrupt, or not an object."""
     try:
         return _OBJECT.validate_json(path.read_bytes())
     except (OSError, ValidationError):
@@ -39,10 +38,10 @@ def load(path: Path) -> dict[str, Json] | None:
 
 
 def write_bytes(path: Path, data: bytes) -> None:
-    """Записать байты атомарно; ошибки — наружу.
+    """Write bytes atomically; errors propagate.
 
     Raises:
-        OSError: каталог недоступен или диск не принял запись.
+        OSError: the directory is inaccessible or the disk rejected the write.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
@@ -55,21 +54,21 @@ def write_bytes(path: Path, data: bytes) -> None:
         raise
 
 
-def save(path: Path, data: Mapping[str, Json]) -> None:
-    """Записать JSON-объект атомарно; ошибки — наружу.
+def save(path: Path, data: Mapping[str, JsonValue]) -> None:
+    """Write a JSON object atomically; errors propagate.
 
     Raises:
-        OSError: каталог недоступен или диск не принял запись.
+        OSError: the directory is inaccessible or the disk rejected the write.
     """
     write_bytes(path, json.dumps(data, ensure_ascii=False).encode())
 
 
-def load_stamped(path: Path) -> tuple[float, dict[str, Json]]:
-    """Прочитать запись с отметкой времени.
+def load_stamped(path: Path) -> tuple[float, dict[str, JsonValue]]:
+    """Read a record with its timestamp.
 
     Returns:
-        Возраст записи в секундах и её содержимое без отметки. Возраст `inf` и
-        пустое содержимое — файла нет, он битый или отметка не число.
+        The record's age in seconds and its content without the timestamp. Age `inf` and
+        empty content mean the file is missing, corrupt, or the timestamp isn't a number.
     """
     try:
         stamped = _Stamped.model_validate(load(path))
@@ -78,26 +77,26 @@ def load_stamped(path: Path) -> tuple[float, dict[str, Json]]:
     return time() - stamped.checked_at, stamped.model_extra or {}
 
 
-def save_stamped(path: Path, data: Mapping[str, Json]) -> None:
-    """Записать содержимое с текущей отметкой времени; ошибки — наружу."""
+def save_stamped(path: Path, data: Mapping[str, JsonValue]) -> None:
+    """Write content with the current timestamp; errors propagate."""
     save(path, {"checked_at": time(), **data})
 
 
 def private_dir(path: Path) -> Path:
-    """Создать каталог 0700 и убедиться, что он наш и закрыт от других.
+    """Create a 0700 directory and make sure it's ours and closed to others.
 
-    Нужен там, где чужой каталог опасен: сокет ControlMaster в подставленном
-    каталоге отдал бы соединение и пароль sudo чужому процессу. Проверяется сам
-    путь, без перехода по символической ссылке: подставленная ссылка увела бы
-    сокеты в каталог, выбранный не нами.
+    Needed where a foreign directory is dangerous: a ControlMaster socket in a planted
+    directory would hand the connection and the sudo password to another process. The
+    path itself is checked without following a symlink: a planted symlink would redirect
+    sockets into a directory we didn't choose.
 
     Raises:
-        PermissionError: путь — не каталог (в том числе ссылка), принадлежит не
-            нам или открыт группе/остальным.
-        OSError: каталог не создаётся.
+        PermissionError: the path is not a directory (including a symlink), is not
+            owned by us, or is open to group/others.
+        OSError: the directory can't be created.
     """
     path.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIR_MODE)
     info = path.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-        raise PermissionError(f"каталог {path} должен быть нашим, не ссылкой и с правами 0700")
+        raise PermissionError(f"directory {path} must be ours, not a symlink, and mode 0700")
     return path

@@ -1,8 +1,9 @@
-"""Параллельный запуск однотипной работы с сохранением порядка результатов.
+"""Running uniform work in parallel while preserving result order.
 
-`fan_out` — синхронная работа в потоках (пробы, `ssh -G`, глубокие проверки),
-`gather` — сопрограммы в одной группе задач (HTTP-запросы llms). Ошибка любого
-элемента — наружу: обёртка, которой нужен частичный результат, ловит её сама.
+`fan_out` is synchronous work in threads (probes, `ssh -G`, deep checks);
+`gather` is coroutines in a single task group (llms HTTP requests). Any
+element's error propagates; a caller that needs a partial result catches it
+itself.
 """
 
 from collections.abc import Awaitable, Callable, Iterable
@@ -14,7 +15,7 @@ from ..config.constants import MAX_WORKERS
 
 
 def fan_out[T, R](fn: Callable[[T], R], items: Iterable[T]) -> list[R]:
-    """Применить `fn` к каждому элементу в потоках, не больше `MAX_WORKERS` разом."""
+    """Apply `fn` to each item in threads, at most `MAX_WORKERS` at a time."""
     todo = list(items)
     if not todo:
         return []
@@ -23,7 +24,7 @@ def fan_out[T, R](fn: Callable[[T], R], items: Iterable[T]) -> list[R]:
 
 
 async def gather[T, R](fn: Callable[[T], Awaitable[R]], items: Iterable[T]) -> list[R]:
-    """Выполнить `fn` для всех элементов параллельно в одной группе задач."""
+    """Run `fn` for all items in parallel within a single task group."""
     todo = list(items)
     results: dict[int, R] = {}
 

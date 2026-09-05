@@ -60,6 +60,7 @@ from ...core.config.constants import (
 from ...core.config.environment import Settings, get_settings
 from ...core.errors import UserError
 from ...core.schemas import KnownSource
+from ...core.template import Link, markdown_index
 from ...core.utils.parallel import gather
 from .schemas import (
     IndexEntry,
@@ -298,6 +299,28 @@ def parse_index(text: str, base_url: str) -> LlmsIndex:
                 IndexEntry(title=m["title"].strip(), url=url, description=m["desc"].strip(), section=section)
             )
     return LlmsIndex(url=base_url, title=title, summary=summary, entries=entries, full_url=full_url)
+
+
+def render_index(index: LlmsIndex) -> str:
+    """Render an index as compact `llms.txt`-style markdown — the tool's response.
+
+    Maps the index onto the shared markdown template (`core.template`): links as
+    the source has them, then the other files found on the domain, with sizes.
+    """
+    links = [
+        Link(title=entry.title, url=entry.url, description=entry.description, section=entry.section)
+        for entry in index.entries
+    ]
+    trailing: list[str] = []
+    for variant in index.variants:
+        if variant.name == LLMS_INDEX_NAME:
+            continue
+        size = f" — {variant.size} bytes" if variant.size is not None else ""
+        note = " (read via llms_search scope=full)" if variant.name == LLMS_FULL_NAME else ""
+        trailing.append(f"{variant.name}{size}{note}")
+    return markdown_index(
+        index.title, index.summary, links, trailing_heading="Other files on the domain", trailing=trailing
+    )
 
 
 def sections(text: str) -> list[tuple[str, str]]:

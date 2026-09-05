@@ -13,8 +13,8 @@ from mcp_hostops.core.config.environment import Settings, get_settings
 from mcp_hostops.core.errors import UserError
 from mcp_hostops.core.schemas import KnownSource
 from mcp_hostops.routers.llms import services
-from mcp_hostops.routers.llms.schemas import LlmsIndex, SearchResult, SearchScope, SourceStatus
-from mcp_hostops.routers.llms.services import Session
+from mcp_hostops.routers.llms.schemas import IndexEntry, LlmsIndex, SearchResult, SearchScope, SourceStatus, Variant
+from mcp_hostops.routers.llms.services import Session, render_index
 
 INDEX = """# Ruff
 
@@ -481,3 +481,31 @@ def test_guard_runs_once_per_host(monkeypatch: pytest.MonkeyPatch) -> None:
 
     anyio.run(load)
     assert resolved == ["one.example"]
+
+
+def test_render_index_maps_entries_and_files() -> None:
+    index = LlmsIndex(
+        url="https://x/llms.txt",
+        title="Ruff",
+        summary="Fast.",
+        entries=[IndexEntry(title="Config", url="https://x/c", description="how to", section="Configuration")],
+        full_url="https://x/llms-full.txt",
+        variants=[Variant(name="llms.txt", size=None), Variant(name="llms-full.txt", size=5000)],
+    )
+    md = render_index(index)
+    assert md.startswith("# Ruff\n\n> Fast.\n")
+    assert "## Configuration\n- [Config](https://x/c): how to\n" in md
+    assert "- llms-full.txt — 5000 bytes (read via llms_search scope=full)" in md
+    assert "- llms.txt" not in md  # the index file itself is not listed as an extra
+
+
+def test_render_index_without_extras() -> None:
+    index = LlmsIndex(
+        url="https://x/llms.txt",
+        title="Demo",
+        summary="",
+        entries=[IndexEntry(title="a", url="https://x/a", description="", section="")],
+        full_url="",
+        variants=[Variant(name="llms.txt", size=None)],
+    )
+    assert render_index(index) == "# Demo\n- [a](https://x/a)\n"

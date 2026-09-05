@@ -103,7 +103,6 @@ LLMS_DEFAULT_SOURCES: Final[tuple[KnownSource, ...]] = (
             "Anthropic API: Messages API, модели, цены, tool use, кэширование "
             "промптов, лимиты, коды ошибок, release notes"
         ),
-        full="https://docs.claude.com/llms-full.txt",
         full_size=40_000_000,
         default=True,
     ),
@@ -137,7 +136,6 @@ LLMS_DEFAULT_SOURCES: Final[tuple[KnownSource, ...]] = (
         domain="docs.pydantic.dev/latest",
         index="https://docs.pydantic.dev/latest/llms.txt",
         covers="pydantic: модели, валидаторы, сериализация, справочник API, разбор текстов ошибок",
-        full="https://docs.pydantic.dev/latest/llms-full.txt",
         full_size=2_000_000,
         default=True,
     ),
@@ -148,7 +146,6 @@ LLMS_DEFAULT_SOURCES: Final[tuple[KnownSource, ...]] = (
             "FastMCP: серверы и клиенты MCP на Python — инструменты, ресурсы, "
             "промпты, монтирование, транспорты, аутентификация, тесты"
         ),
-        full="https://gofastmcp.com/llms-full.txt",
         full_size=3_000_000,
         default=True,
     ),

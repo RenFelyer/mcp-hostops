@@ -144,7 +144,7 @@ def test_default_registry_consistent() -> None:
         assert k.index.startswith("https://")
         assert k.index.endswith("llms.txt")
         assert k.covers
-        assert (k.full == "") == (k.full_size is None)  # размер только вместе с адресом
+        assert k.full_size is None or k.full_size > 0  # размер, если задан, положителен
     assert "llms.txt" in constants.LLMS_VARIANTS
     assert "llms-full.txt" in constants.LLMS_VARIANTS
 
@@ -289,8 +289,8 @@ def test_add_and_remove_source_persist(monkeypatch: pytest.MonkeyPatch) -> None:
 
     added = anyio.run(add, "new.example", "новое", None)
     assert added.default is False
-    assert added.full == "https://new.example/llms-full.txt"
-    assert added.full_size == len(FULL.encode())
+    assert added.index == "https://new.example/llms.txt"
+    assert added.full_size == len(FULL.encode())  # размер llms-full.txt узнан HEAD-ом
     assert s.llms_sources_file.is_file()
 
     # Файл читается заново — так источник переживает перезапуск; флаг default

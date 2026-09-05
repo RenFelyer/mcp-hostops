@@ -494,11 +494,20 @@ class Session:
             )
         return SourcesResult(checked_ago=0.0, sources=statuses, variants=list(LLMS_VARIANTS))
 
+    async def _full_size(self, index_url: str) -> int | None:
+        """Размер `llms-full.txt` рядом с индексом (один HEAD); None — файла нет."""
+        try:
+            head = await self.fetch(urljoin(index_url, LLMS_FULL_NAME), "HEAD")
+        except UserError:
+            return None
+        return head.content_length if head.ok and not head.is_html else None
+
     async def add_source(self, domain: str, covers: str, index: str | None) -> SourceStatus:
         """Проверить источник по сети, добавить в пользовательский файл и вернуть.
 
         Индекс скачивается целиком: он должен быть текстом с хотя бы одной
-        ссылкой. `llms-full.txt` рядом и его размер определяются сами.
+        ссылкой. Размер `llms-full.txt` рядом узнаётся одним HEAD; остальные
+        варианты (small, ctx…) не пробуются — их показывает llms_index.
 
         Raises:
             UserError: домен уже есть, индекса нет, это заглушка или в нём нет
@@ -508,17 +517,10 @@ class Session:
         s = self.s
         if find_source(domain, s) is not None:
             raise UserError(f"источник {domain!r} уже есть")
-        parsed = await self.load_index(index or domain)
+        parsed = await self.index(index or domain)
         if not parsed.entries:
             raise UserError(f"{parsed.url}: в индексе нет ни одной ссылки — это не llms.txt")
-        full = next((v for v in parsed.variants if v.name == LLMS_FULL_NAME), None)
-        known = KnownSource(
-            domain=domain,
-            index=parsed.url,
-            covers=covers,
-            full=urljoin(parsed.url, LLMS_FULL_NAME) if full else "",
-            full_size=full.size if full else None,
-        )
+        known = KnownSource(domain=domain, index=parsed.url, covers=covers, full_size=await self._full_size(parsed.url))
         _save_sources([*custom_sources(s), known], s)
         _forget_status(s)
         return SourceStatus(**known.model_dump(), state="ok", detail="")

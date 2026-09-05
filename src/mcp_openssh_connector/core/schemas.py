@@ -69,6 +69,7 @@ class KnownSource(BaseModel):
     domain: str = Field(description="как называть источник в llms_index/llms_search")
     index: str = Field(description="адрес `llms.txt`")
     covers: str
-    full: str = Field(default="", description="адрес `llms-full.txt`, если известен")
-    full_size: int | None = Field(default=None, description="размер full-файла в байтах, чтобы не читать целиком")
+    # Адрес llms-full.txt не храним — он выводится из index; размер по нему не
+    # угадать, а full бывает десятки МБ, потому размер оставляем как подсказку.
+    full_size: int | None = Field(default=None, description="размер llms-full.txt в байтах; null — full-файла нет")
     default: bool = Field(default=False, description="встроенный; удалить нельзя")

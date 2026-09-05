@@ -52,7 +52,8 @@ async def llms_add_source(domain: NonEmptyStr, covers: NonEmptyStr, index: NonEm
     """Добавить источник в реестр; переживает перезапуск сервера.
 
     Индекс скачивается и проверяется: должен быть текстом со ссылками, не
-    HTML-заглушкой. Наличие и размер `llms-full.txt` рядом определяются сами.
+    HTML-заглушкой. Размер `llms-full.txt` рядом узнаётся HEAD-ом; остальные
+    варианты потом покажет llms_index.
 
     Args:
         domain: Имя источника, как его потом называть (`docs.example.com/v2`).

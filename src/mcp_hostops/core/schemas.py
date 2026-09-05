@@ -12,13 +12,16 @@ from mcp_types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 # A string tool parameter for which an empty string is a call error.
-NonEmptyStr = Annotated[str, Field(min_length=1)]
+type NonEmptyStr = Annotated[str, Field(min_length=1)]
+
+# A port number: positive. Shared by Host, ManagedHost and the add_host parameter.
+type Port = Annotated[int, Field(gt=0)]
 
 # Host availability: the status value in the hosts router's responses and in probes.
-Availability = Literal["available", "unavailable", "unknown"]
+type Availability = Literal["available", "unavailable", "unknown"]
 
 # sudo mode in run/start.
-SudoMode = Literal["auto", "true", "false"]
+type SudoMode = Literal["auto", "true", "false"]
 
 # Client hints shared by several tools; all four are set explicitly because the MCP
 # defaults (destructive and open_world — true) are almost always wrong. A tool with a
@@ -37,7 +40,7 @@ class Host(BaseModel):
     alias: str
     hostname: str
     user: str
-    port: int
+    port: Port
     proxyjump: str = Field(description="jump host alias; empty if the connection is direct")
 
 
@@ -71,7 +74,11 @@ class KnownSource(BaseModel):
 
 
 class Link(BaseModel):
-    """One entry for the shared markdown template (`core/template`)."""
+    """A titled URL with an optional description and section.
+
+    The shared unit for the markdown template (`core/template`) and for the
+    parsed `llms.txt` table of contents.
+    """
 
     model_config = ConfigDict(frozen=True)
 

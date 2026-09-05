@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from ...core.schemas import Host
+from ...core.schemas import Host, Port
 
 
 class ManagedHost(BaseModel):
@@ -11,7 +11,7 @@ class ManagedHost(BaseModel):
     alias: str
     hostname: str
     user: str = ""
-    port: int = 22
+    port: Port = 22
     identity_file: str = ""
     proxy_jump: str = Field(default="", description="jump host alias")
     extra: dict[str, str] = Field(default_factory=dict, description='other ssh options, "Key Value"')

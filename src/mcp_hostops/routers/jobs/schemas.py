@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from ...core.schemas import CapturedOutput
 
-JobStatus = Literal["running", "done", "killed", "error"]
+type JobStatus = Literal["running", "done", "killed", "error"]
 
 
 class JobRef(BaseModel):

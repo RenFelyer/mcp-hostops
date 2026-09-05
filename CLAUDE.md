@@ -53,6 +53,12 @@ uv run pytest tests/test_x.py::test_name   # один тест
   должно — ни в `services.py`, ни в `utils/`, ни в `store.py`. Единственное
   исключение — `Settings` (`pydantic_settings`) в `core/config/environment.py`:
   это конфигурация, а не схема данных. Схемы наследуют, а не копируют поля.
+- **Вокабуляры и типы-параметры — `type`-алиасы (PEP 695)** там же, в
+  `schemas.py`: `type Availability = Literal[...]`, `type NonEmptyStr =
+  Annotated[str, Field(min_length=1)]`, `type Port = Annotated[int,
+  Field(gt=0)]`. Ограничение задаётся один раз в алиасе и переиспользуется в
+  моделях и параметрах инструментов (fastmcp переносит его в схему); дублировать
+  `Annotated[..., Field(...)]` по месту не нужно.
 - **Ответ-документ** (отрисованный индекс, страница) инструмент отдаёт
   markdown-текстом через `ToolResult` (общий рендер — `core/template`), а не
   моделью: для читателя это компактнее многословного JSON.

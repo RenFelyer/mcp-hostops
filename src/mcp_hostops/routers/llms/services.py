@@ -63,7 +63,6 @@ from ...core.template import markdown_index
 from ...core.utils.parallel import gather
 from .schemas import (
     Fetched,
-    IndexEntry,
     LlmsIndex,
     Page,
     SearchHit,
@@ -252,7 +251,7 @@ def parse_index(text: str, base_url: str) -> LlmsIndex:
     variants aren't checked here — that's network I/O, see `Session.variants`.
     """
     title = summary = section = full_url = ""
-    entries: list[IndexEntry] = []
+    entries: list[Link] = []
     for raw in text.splitlines():
         line = raw.strip()
         if line.startswith("# ") and not title:
@@ -265,22 +264,16 @@ def parse_index(text: str, base_url: str) -> LlmsIndex:
             url = urljoin(base_url, m["url"])
             if url.endswith(LLMS_FULL_NAME):
                 full_url = url
-            entries.append(
-                IndexEntry(title=m["title"].strip(), url=url, description=m["desc"].strip(), section=section)
-            )
+            entries.append(Link(title=m["title"].strip(), url=url, description=m["desc"].strip(), section=section))
     return LlmsIndex(url=base_url, title=title, summary=summary, entries=entries, full_url=full_url)
 
 
 def render_index(index: LlmsIndex) -> str:
     """Render an index as compact `llms.txt`-style markdown — the tool's response.
 
-    Maps the index onto the shared markdown template (`core.template`): links as
-    the source has them, then the other files found on the domain, with sizes.
+    The entries are already `Link`s; only the other files on the domain (with
+    sizes) are appended as trailing bullets.
     """
-    links = [
-        Link(title=entry.title, url=entry.url, description=entry.description, section=entry.section)
-        for entry in index.entries
-    ]
     trailing: list[str] = []
     for variant in index.variants:
         if variant.name == LLMS_INDEX_NAME:
@@ -289,7 +282,7 @@ def render_index(index: LlmsIndex) -> str:
         note = " (read via llms_search scope=full)" if variant.name == LLMS_FULL_NAME else ""
         trailing.append(f"{variant.name}{size}{note}")
     return markdown_index(
-        index.title, index.summary, links, trailing_heading="Other files on the domain", trailing=trailing
+        index.title, index.summary, index.entries, trailing_heading="Other files on the domain", trailing=trailing
     )
 
 

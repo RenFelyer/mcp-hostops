@@ -5,14 +5,11 @@ them to a thread. Client hints differ per tool: all of them edit local files
 (except copy_id, which also connects to the host), so there are no shared presets here.
 """
 
-from typing import Annotated
-
 import anyio.to_thread
 from fastmcp import FastMCP
 from mcp_types import ToolAnnotations
-from pydantic import Field
 
-from ...core.schemas import NonEmptyStr
+from ...core.schemas import NonEmptyStr, Port
 from . import services
 from .schemas import AddHostResult, CopyIdResult, ForgetHostResult, ManagedHost, RemoveHostResult
 
@@ -31,7 +28,7 @@ async def add_host(
     alias: NonEmptyStr,
     hostname: NonEmptyStr,
     user: str = "",
-    port: Annotated[int, Field(gt=0)] = 22,
+    port: Port = 22,
     identity_file: str = "",
     proxy_jump: str = "",
     extra: dict[str, str] | None = None,

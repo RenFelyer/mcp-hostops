@@ -11,10 +11,9 @@ import pytest
 from mcp_hostops.core.config import constants
 from mcp_hostops.core.config.environment import Settings, get_settings
 from mcp_hostops.core.errors import UserError
-from mcp_hostops.core.schemas import KnownSource
+from mcp_hostops.core.schemas import KnownSource, Link
 from mcp_hostops.routers.llms import services
 from mcp_hostops.routers.llms.schemas import (
-    IndexEntry,
     LlmsIndex,
     Page,
     SearchHit,
@@ -497,7 +496,7 @@ def test_render_index_maps_entries_and_files() -> None:
         url="https://x/llms.txt",
         title="Ruff",
         summary="Fast.",
-        entries=[IndexEntry(title="Config", url="https://x/c", description="how to", section="Configuration")],
+        entries=[Link(title="Config", url="https://x/c", description="how to", section="Configuration")],
         full_url="https://x/llms-full.txt",
         variants=[Variant(name="llms.txt", size=None), Variant(name="llms-full.txt", size=5000)],
     )
@@ -513,7 +512,7 @@ def test_render_index_without_extras() -> None:
         url="https://x/llms.txt",
         title="Demo",
         summary="",
-        entries=[IndexEntry(title="a", url="https://x/a", description="", section="")],
+        entries=[Link(title="a", url="https://x/a", description="", section="")],
         full_url="",
         variants=[Variant(name="llms.txt", size=None)],
     )

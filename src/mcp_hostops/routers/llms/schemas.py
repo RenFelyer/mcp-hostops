@@ -5,13 +5,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ...core.schemas import Checked, KnownSource
+from ...core.schemas import Checked, KnownSource, Link
 
 # Where to search: in the table of contents or in the whole documentation as one file.
-SearchScope = Literal["index", "full"]
+type SearchScope = Literal["index", "full"]
 
 # Outcome of a source check: the index responds with text; doesn't respond; HTML stub.
-SourceState = Literal["ok", "unavailable", "stub"]
+type SourceState = Literal["ok", "unavailable", "stub"]
 
 
 class Fetched(BaseModel):
@@ -62,15 +62,6 @@ class SourcesResult(Checked):
     variants: list[str] = Field(description="file names that llms_index looks for on a domain")
 
 
-class IndexEntry(BaseModel):
-    """A link from the `llms.txt` table of contents."""
-
-    title: str
-    url: str = Field(description="absolute address; pass to llms_fetch as-is")
-    description: str
-    section: str = Field(description="index section heading; empty outside sections")
-
-
 class Variant(BaseModel):
     """A file found next to the index."""
 
@@ -84,7 +75,7 @@ class LlmsIndex(BaseModel):
     url: str = Field(description="address of the index itself")
     title: str
     summary: str
-    entries: list[IndexEntry]
+    entries: list[Link] = Field(description="table of contents; each url is absolute, pass to llms_fetch as-is")
     full_url: str = Field(description="address of `llms-full.txt`, if the index names it")
     variants: list[Variant] = Field(default_factory=list, description="files found next to the index")
 

@@ -23,6 +23,14 @@ SSH_DIR: Final = Path.home() / ".ssh"
 SSH_CONFIG: Final = SSH_DIR / "config"  # ssh всё равно читает именно его
 TERM_GRACE: Final = 2.0  # секунд между SIGTERM и SIGKILL при таймауте run
 
+# ── управление ~/.ssh/config ───────────────────────────────────────────────────
+SECRET_FILE_MODE: Final = 0o600  # права файла-секрета и managed-конфига
+# Шапка managed-файла: сервер владеет им целиком и вправе перезаписать.
+MANAGED_HEADER: Final = "# Управляется mcp-openssh-connector: add_host/remove_host.\n"
+# Порядок ключей в каноническом Host-блоке; прочие опции идут после в порядке ввода.
+MANAGED_KEY_ORDER: Final = ("HostName", "User", "Port", "IdentityFile", "ProxyJump")
+SSH_DEFAULT_PORT: Final = 22  # порт ssh по умолчанию: для него known_hosts не пишет `[host]:port`
+
 # ── пробы доступности ────────────────────────────────────────────────────────
 # ZeroTier поднимает путь к пиру лениво: пока идёт рандеву через корневые
 # серверы, ядро мгновенно отдаёт EHOSTUNREACH. Одна проба принимает это за

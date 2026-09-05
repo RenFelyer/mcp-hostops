@@ -97,6 +97,18 @@ def read_aliases(config: Path = SSH_CONFIG) -> list[str]:
     return list(dict.fromkeys(names))
 
 
+def config_files(config: Path = SSH_CONFIG) -> set[Path]:
+    """Файлы, которые ssh прочитал бы для конфига, с раскрытием `Include`.
+
+    Нужно, чтобы понять, подключён ли уже managed-файл: если он среди этих
+    путей, второй `Include` не добавляем.
+    """
+    names: list[str] = []
+    seen: set[Path] = set()
+    _scan_aliases(config, names, seen)
+    return seen
+
+
 def resolve(alias: str, timeout: float) -> Host | None:
     """Параметры хоста глазами ssh.
 

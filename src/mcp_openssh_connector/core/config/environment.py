@@ -76,6 +76,15 @@ class Settings(BaseSettings):
     # Каталог с паролями sudo: `<alias>.secret`, права 0600.
     secret_dir: Path = Field(default_factory=lambda: Path.home() / ".ssh")
 
+    # ── управление ~/.ssh/config ──────────────────────────────────────────────
+    # Основной конфиг ssh и managed-файл, куда add_host пишет свои Host-блоки:
+    # managed-файл подключается к основному через `Include` (один раз). Разнесены
+    # настройками, чтобы тесты не трогали настоящий ~/.ssh.
+    ssh_config_file: Path = Field(default_factory=lambda: Path.home() / ".ssh" / "config")
+    managed_config_file: Path = Field(default_factory=lambda: Path.home() / ".ssh" / "config.d" / "mcp.conf")
+    known_hosts_file: Path = Field(default_factory=lambda: Path.home() / ".ssh" / "known_hosts")
+    copy_id_timeout: float = 30.0  # секунд на ssh-copy-id (вход и запись ключа на хост)
+
     # Хосты, где sudo требует терминал: для них ssh идёт с `-tt`.
     # В окружении — JSON-список: OPENSSH_MCP_PTY_HOSTS='["a","b"]'.
     pty_hosts: frozenset[str] = frozenset()

@@ -34,6 +34,10 @@ EXPECTED = {
     "llms_index",
     "llms_search",
     "llms_fetch",
+    "add_host",
+    "remove_host",
+    "forget_host",
+    "copy_id",
 }
 
 

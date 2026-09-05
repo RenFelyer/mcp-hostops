@@ -40,11 +40,17 @@ uv run mcp-openssh-connector # сервер по stdio
 | `host_info` | Параметры хоста глазами `ssh -G`: hostname, user, port, jump-хост |
 | `run` | Команда на хосте с таймаутом, stdin и sudo; вывод с потолком по байтам |
 | `start`, `job`, `kill`, `jobs` | Долгие команды в фоне: запуск, прирост вывода, снятие, обзор |
+| `add_host`, `remove_host` | Добавить/удалить хост в `~/.ssh/config` через managed-файл, подключённый `Include` |
+| `forget_host` | Забыть ключ хоста в `known_hosts` (сменился ключ, «host identification has changed») |
+| `copy_id` | Раздать публичный ключ хосту (`ssh-copy-id`), пароль — из `~/.ssh/<alias>.secret` |
 | `llms_sources`, `llms_add_source`, `llms_remove_source` | Реестр источников `llms.txt` с проверкой, что они живы |
 | `llms_index`, `llms_search`, `llms_fetch` | Оглавление, поиск по оглавлению или `llms-full.txt`, страница кусками |
 
 Хосты за `ProxyJump` проверяются изнутри jump-хоста (на нём нужны `bash` и
-`timeout`). Задачи живут в пределах сессии сервера. Инструменты `llms_*`
+`timeout`). `add_host` пишет канонический Host-блок в `~/.ssh/config.d/mcp.conf`
+и один раз подключает его к основному конфигу `Include`-директивой; ручной
+`~/.ssh/config` не переписывается. `copy_id` требует установленных `ssh-copy-id`
+и `sshpass`. Задачи живут в пределах сессии сервера. Инструменты `llms_*`
 ходят только по https на публичные имена, разрешающиеся в публичные адреса;
 каждый ход переадресации проверяется до отправки запроса.
 
@@ -77,6 +83,8 @@ uv run mcp-openssh-connector # сервер по stdio
 | `LLMS_TIMEOUT`, `LLMS_CACHE_TTL`, `LLMS_MAX_BYTES` | HTTP-таймаут, срок и потолок кэша скачанного |
 | `LLMS_PAGE_CHARS`, `LLMS_HIT_CHARS`, `LLMS_MAX_HITS`, `LLMS_STATUS_TTL` | Размеры ответов и срок проверки источников |
 | `SECRET_DIR`, `PTY_HOSTS` | Каталог секретов; хосты с `requiretty` (JSON-список) |
+| `SSH_CONFIG_FILE`, `MANAGED_CONFIG_FILE`, `KNOWN_HOSTS_FILE` | Основной конфиг, managed-файл `add_host` и `known_hosts` |
+| `COPY_ID_TIMEOUT` | Таймаут `ssh-copy-id`, секунды |
 | `LLMS_CACHE_DIR`, `LLMS_SOURCES_FILE` | Кэш скачанного и файл пользовательских источников |
 | `DEBUG_LOG` | Путь к отладочному логу; без него лог выключен |
 

@@ -59,8 +59,8 @@ from ...core.config.constants import (
 )
 from ...core.config.environment import Settings, get_settings
 from ...core.errors import UserError
-from ...core.schemas import KnownSource
-from ...core.template import Link, markdown_index
+from ...core.schemas import KnownSource, Link
+from ...core.template import markdown_index
 from ...core.utils.parallel import gather
 from .schemas import (
     IndexEntry,

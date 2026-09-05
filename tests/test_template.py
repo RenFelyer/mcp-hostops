@@ -1,6 +1,7 @@
 """Shared markdown template: title/summary/sections, links, trailing bullets."""
 
-from mcp_hostops.core.template import Link, markdown_index
+from mcp_hostops.core.schemas import Link
+from mcp_hostops.core.template import markdown_index
 
 
 def test_markdown_index_full_shape() -> None:

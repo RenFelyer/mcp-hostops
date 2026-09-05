@@ -8,18 +8,7 @@ payload is data return a pydantic model as usual.
 
 from collections.abc import Sequence
 
-from pydantic import BaseModel, ConfigDict
-
-
-class Link(BaseModel):
-    """One entry in a rendered index."""
-
-    model_config = ConfigDict(frozen=True)
-
-    title: str
-    url: str
-    description: str = ""
-    section: str = ""
+from .schemas import Link
 
 
 def markdown_index(

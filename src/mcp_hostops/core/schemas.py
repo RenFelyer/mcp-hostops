@@ -68,3 +68,14 @@ class KnownSource(BaseModel):
     # guessed from that, and full can be tens of MB, so we keep the size as a hint.
     full_size: int | None = Field(default=None, description="llms-full.txt size in bytes; null means no full file")
     default: bool = Field(default=False, description="built-in; cannot be removed")
+
+
+class Link(BaseModel):
+    """One entry for the shared markdown template (`core/template`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    url: str
+    description: str = ""
+    section: str = ""

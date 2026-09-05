@@ -16,7 +16,7 @@ dependencies = [
 uvloop = ["uvloop>=0.22.1"]
 
 [project.scripts]
-mcp-hostops = "mcp_hostops.main:main"
+mcp-hostops = "mcp_hostops:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -59,6 +59,10 @@ max-positional-args = 8
 # В тестах числовые ожидания и пароли — это данные, а не «магические значения»
 # и не утечки; assert — сам механизм проверки.
 "tests/**" = ["PLR2004", "S101", "S106", "D1"]  # D1: тест описывает имя, не докстринг
+
+# Точка входа держит импорты внутри main(), чтобы импорт пакета оставался дешёвым
+# и без side-effect (импорт сервера строит и монтирует роутеры).
+"src/mcp_hostops/__init__.py" = ["PLC0415"]
 
 # Докстринги — Google style: одна строка резюме, пустая строка, разделы
 # Args/Returns/Raises там, где они добавляют к резюме.

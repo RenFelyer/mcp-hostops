@@ -1,8 +1,11 @@
 """Status orchestration: deep skips TCP probes, an unknown alias is unknown."""
 
+from math import inf
+from pathlib import Path
+
 import pytest
 
-from mcp_hostops.core import cache
+from mcp_hostops.core import store
 from mcp_hostops.core.config.environment import Settings
 from mcp_hostops.core.schemas import Host
 from mcp_hostops.routers.hosts import services
@@ -10,6 +13,18 @@ from mcp_hostops.routers.hosts import services
 
 def _host(alias: str) -> Host:
     return Host(alias=alias, hostname="10.0.0.1", user="u", port=22, proxyjump="")
+
+
+def test_read_cache_roundtrip_and_garbage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    s = Settings()
+    store.write_stamped(s, "runtime", "hosts-status.json", {"hosts": {"a": "available", "b": "unknown"}})
+    age, statuses = services._read_cache(s)
+    assert 0 <= age < 5
+    assert statuses == {"a": "available", "b": "unknown"}
+    # an unrecognized status invalidates the whole cache
+    store.write_stamped(s, "runtime", "hosts-status.json", {"hosts": {"a": "maybe"}})
+    assert services._read_cache(s) == (inf, {})
 
 
 def test_check_statuses_deep_skips_tcp_probe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,7 +54,7 @@ def test_check_statuses_shallow_uses_measure(monkeypatch: pytest.MonkeyPatch) ->
 def test_list_statuses_fresh_cache_and_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     hosts = [_host("a"), _host("b")]
     monkeypatch.setattr(services, "discover", lambda _timeout: hosts)
-    monkeypatch.setattr(cache, "read", lambda _s: (1.0, {"a": "available"}))
+    monkeypatch.setattr(services, "_read_cache", lambda _s: (1.0, {"a": "available"}))
     monkeypatch.setattr(services, "measure", lambda *_: pytest.fail("fresh cache — no probes"))
     monkeypatch.setattr(services, "get_settings", Settings)
 
@@ -49,14 +64,14 @@ def test_list_statuses_fresh_cache_and_unknown(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_list_statuses_refresh_remeasures_and_writes_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    written: dict[str, str] = {}
+    written: dict[tuple[str, str], dict[str, dict[str, str]]] = {}
     monkeypatch.setattr(services, "discover", lambda _timeout: [_host("a")])
     monkeypatch.setattr(services, "get_settings", Settings)
-    monkeypatch.setattr(cache, "read", lambda _s: (999.0, {}))  # stale — must remeasure
+    monkeypatch.setattr(services, "_read_cache", lambda _s: (999.0, {}))  # stale — must remeasure
     monkeypatch.setattr(services, "measure", lambda _hosts, _s: {"a": "available"})
-    monkeypatch.setattr(cache, "write", lambda statuses, _s: written.update(statuses))
+    monkeypatch.setattr(store, "write_stamped", lambda _s, tier, name, data: written.update({(tier, name): data}))
 
     got = services.list_statuses(refresh=True)
     assert got.checked_ago == 0.0
     assert [(h.alias, h.status) for h in got.hosts] == [("a", "available")]
-    assert written == {"a": "available"}  # the fresh measurement was cached
+    assert written == {("runtime", "hosts-status.json"): {"hosts": {"a": "available"}}}  # cached to runtime tier

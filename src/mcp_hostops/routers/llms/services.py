@@ -1,8 +1,8 @@
 """Service layer for the llms.txt router: source registry, cached downloads, parsing, search.
 
 The registry is the built-in `LLMS_DEFAULT_SOURCES` list (vetted, can't be
-removed) plus a user JSON file, `llms_sources_file`, that survives a server
-restart. The `default` flag is neither written to nor read from that file, so
+removed) plus user sources in the persistent store tier. The `default` flag is
+neither written to nor read from that slot, so
 that hand-editing it can't make a source un-removable; domains that collide
 with a built-in one are skipped when reading the file.
 
@@ -36,8 +36,6 @@ import re
 import socket
 from collections.abc import Awaitable, Callable
 from itertools import pairwise
-from pathlib import Path
-from time import time
 from types import TracebackType
 from typing import Self
 from urllib.parse import urljoin, urlsplit
@@ -82,6 +80,11 @@ _HEADING = re.compile(r"#{1,3} ")
 _HOSTNAME = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")
 _VERDICTS = TypeAdapter(dict[str, SourceVerdict])  # contents of the outcomes file, keyed by domain
 _SOURCES = TypeAdapter(list[KnownSource])  # contents of the user sources file
+
+# Store slots: user sources are persistent (survive a reboot); source-check outcomes and
+# the download cache live in the runtime and persistent tiers respectively.
+_SOURCES_SLOT = "llms-sources.json"
+_STATUS_SLOT = "llms-sources-status.json"
 
 
 def make_client(s: Settings, guard: Callable[[httpx2.Request], Awaitable[None]]) -> httpx2.AsyncClient:
@@ -150,7 +153,7 @@ async def resolve_public(host: str) -> None:
 
 def custom_sources(s: Settings) -> list[KnownSource]:
     """User sources from the file; a missing or corrupt file yields an empty list."""
-    data = store.load(s.llms_sources_file) or {}
+    data = store.read_json(s, "persistent", _SOURCES_SLOT) or {}
     builtin = {known.domain for known in LLMS_DEFAULT_SOURCES}
     try:
         items = _SOURCES.validate_python(data.get("sources", []))
@@ -160,7 +163,7 @@ def custom_sources(s: Settings) -> list[KnownSource]:
 
 
 def _save_sources(items: list[KnownSource], s: Settings) -> None:
-    store.save(s.llms_sources_file, {"sources": [i.model_dump(exclude={"default"}) for i in items]})
+    store.write_json(s, "persistent", _SOURCES_SLOT, {"sources": [i.model_dump(exclude={"default"}) for i in items]})
 
 
 def all_sources(s: Settings) -> list[KnownSource]:
@@ -176,7 +179,7 @@ def find_source(domain: str, s: Settings) -> KnownSource | None:
 def _forget_status(s: Settings) -> None:
     """Reset check outcomes: the registry's composition has changed."""
     with contextlib.suppress(OSError):
-        s.llms_status_file.unlink()
+        store.forget(s, "runtime", _STATUS_SLOT)
 
 
 def remove_source(domain: str, s: Settings) -> KnownSource:
@@ -217,30 +220,32 @@ def domain_of(url: str, s: Settings) -> str:
     return urlsplit(url).hostname or url
 
 
-def _cache_paths(method: str, url: str, s: Settings) -> tuple[Path, Path]:
+def _cache_slots(method: str, url: str) -> tuple[str, str]:
+    """Persistent-tier slot names for a request's body and its timestamped meta."""
     host = urlsplit(url).hostname or "unknown"
     key = hashlib.sha256(f"{method} {url}".encode()).hexdigest()[:24]
-    base = s.llms_cache_dir / host / key
-    return base.with_suffix(".body"), base.with_suffix(".meta")
+    return f"downloads/{host}/{key}.body", f"downloads/{host}/{key}.meta"
 
 
 def _cached(method: str, url: str, s: Settings) -> Fetched | None:
     """Read from the cache if an entry exists and isn't older than the TTL; otherwise None."""
-    body_path, meta_path = _cache_paths(method, url, s)
+    body_slot, meta_slot = _cache_slots(method, url)
+    age, meta = store.read_stamped(s, "persistent", meta_slot)
+    body = store.read_bytes(s, "persistent", body_slot)
+    if age > s.llms_cache_ttl or body is None:
+        return None
     try:
-        if time() - meta_path.stat().st_mtime > s.llms_cache_ttl:
-            return None
-        return Fetched.model_validate({**(store.load(meta_path) or {}), "body": body_path.read_bytes()})
-    except (OSError, ValidationError):
+        return Fetched.model_validate({**meta, "body": body})
+    except ValidationError:
         return None
 
 
 def _store(method: str, url: str, fetched: Fetched, s: Settings) -> None:
     """Write to the cache; body before meta, so fresh meta never points at a stale body."""
-    body_path, meta_path = _cache_paths(method, url, s)
+    body_slot, meta_slot = _cache_slots(method, url)
     with contextlib.suppress(OSError):
-        store.write_bytes(body_path, fetched.body)
-        store.save(meta_path, fetched.model_dump(exclude={"body"}))
+        store.write_bytes(s, "persistent", body_slot, fetched.body)
+        store.write_stamped(s, "persistent", meta_slot, fetched.model_dump(exclude={"body"}))
 
 
 def parse_index(text: str, base_url: str) -> LlmsIndex:
@@ -512,7 +517,7 @@ class Session:
         """
         s = self.s
         known = all_sources(s)
-        age, saved = store.load_stamped(s.llms_status_file)
+        age, saved = store.read_stamped(s, "runtime", _STATUS_SLOT)
         if not refresh and age < s.llms_status_ttl:
             # The saved data might have been written by a different registry
             # composition, or be corrupt: re-check instead of failing.
@@ -522,8 +527,10 @@ class Session:
                 return SourcesResult(checked_ago=age, sources=statuses, variants=list(LLMS_VARIANTS))
         statuses = await gather(self.check, known)
         with contextlib.suppress(OSError):
-            store.save_stamped(
-                s.llms_status_file,
+            store.write_stamped(
+                s,
+                "runtime",
+                _STATUS_SLOT,
                 {"sources": {st.domain: st.model_dump(include={"state", "detail"}) for st in statuses}},
             )
         return SourcesResult(checked_ago=0.0, sources=statuses, variants=list(LLMS_VARIANTS))

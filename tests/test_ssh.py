@@ -56,16 +56,16 @@ def test_control_args_opts_and_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     args = control_args(s)
     assert "ControlMaster=auto" in args
     assert any(a.startswith("ControlPath=") for a in args)
-    assert s.control_dir.is_dir()  # socket directory was created
-    assert s.control_dir.stat().st_mode & 0o777 == 0o700
+    assert (s.runtime_dir / "control").is_dir()  # socket directory was created
+    assert (s.runtime_dir / "control").stat().st_mode & 0o777 == 0o700
 
 
 def test_control_args_refuse_shared_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A foreign or world-open socket directory is refused: the sudo password travels over the socket.
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     s = Settings()
-    s.control_dir.mkdir(parents=True)
-    s.control_dir.chmod(0o755)
+    (s.runtime_dir / "control").mkdir(parents=True)
+    (s.runtime_dir / "control").chmod(0o755)
     with pytest.raises(PermissionError):
         control_args(s)
 

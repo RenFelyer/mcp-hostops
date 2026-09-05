@@ -46,7 +46,7 @@ def control_args(s: Settings) -> list[str]:
             open to others — a socket that carries commands and the sudo
             password cannot live there.
     """
-    control_dir = private_dir(s.control_dir)
+    control_dir = private_dir(s, "runtime", "control")
     options = [
         "ControlMaster=auto",
         f"ControlPath={control_dir}/%C",

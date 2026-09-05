@@ -90,13 +90,14 @@ uv run mcp-hostops # сервер по stdio
 | `SECRET_DIR`, `PTY_HOSTS` | Каталог секретов; хосты с `requiretty` (JSON-список) |
 | `SSH_CONFIG_FILE`, `MANAGED_CONFIG_FILE`, `KNOWN_HOSTS_FILE` | Основной конфиг, managed-файл `add_host` и `known_hosts` |
 | `COPY_ID_TIMEOUT`, `KEYSCAN_TIMEOUT` | Таймауты `ssh-copy-id` и `ssh-keyscan`, секунды |
-| `LLMS_CACHE_DIR`, `LLMS_SOURCES_FILE` | Кэш скачанного и файл пользовательских источников |
 | `DEBUG_LOG` | Путь к отладочному логу; без него лог выключен |
 
-Состояние живёт в трёх местах по сроку жизни: `XDG_RUNTIME_DIR` (сокеты
-ControlMaster, кэш статусов, итоги проверки источников — до перезагрузки),
-`XDG_CACHE_HOME` (скачанное по `llms.txt`) и `XDG_DATA_HOME` (пользовательские
-источники).
+Состояние живёт в едином tiered-store (`core/store`), тир выбирается по сроку
+жизни: **session** — в оперативной памяти сессии; **runtime** —
+`XDG_RUNTIME_DIR` (сокеты ControlMaster, кэш статусов хостов, итоги проверки
+источников; до перезагрузки); **persistent** — `XDG_CACHE_HOME` (скачанное по
+`llms.txt` и пользовательские источники; переживает перезагрузку, но кэш может
+быть очищен системой). Каталоги тиров не настраиваются — следуют XDG.
 
 ## Роутер llms
 

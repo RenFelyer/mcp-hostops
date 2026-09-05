@@ -5,12 +5,29 @@ it through a thread. Alias resolution (`require_host`, `resolve_known`) is
 shared infrastructure (`hosts`), not part of this router.
 """
 
-from ...core import cache
-from ...core.config.environment import get_settings
+import contextlib
+
+from pydantic import TypeAdapter, ValidationError
+
+from ...core import store
+from ...core.config.environment import Settings, get_settings
+from ...core.schemas import Availability
 from ...core.utils.hosts import discover, resolve_known
 from ...core.utils.parallel import fan_out
 from ...core.utils.probe import Statuses, deep_check, measure
 from .schemas import CheckResult, HostStatus, ListHostsResult
+
+# The availability cache lives in the runtime tier: an optimization, remeasured on any miss.
+_CACHE = "hosts-status.json"
+_HOSTS = TypeAdapter(dict[str, Availability])
+
+
+def _read_cache(s: Settings) -> tuple[float, dict[str, Availability]]:
+    age, data = store.read_stamped(s, "runtime", _CACHE)
+    try:
+        return age, _HOSTS.validate_python(data.get("hosts"))
+    except ValidationError:
+        return float("inf"), {}
 
 
 def list_statuses(refresh: bool) -> ListHostsResult:
@@ -21,10 +38,11 @@ def list_statuses(refresh: bool) -> ListHostsResult:
     """
     s = get_settings()
     hosts = discover(s.ssh_g_timeout)
-    age, statuses = cache.read(s)
+    age, statuses = _read_cache(s)
     if refresh or age >= s.cache_ttl:
         statuses = measure(hosts, s)
-        cache.write(statuses, s)
+        with contextlib.suppress(OSError):
+            store.write_stamped(s, "runtime", _CACHE, {"hosts": dict(statuses)})
         age = 0.0
     return ListHostsResult(
         checked_ago=age,

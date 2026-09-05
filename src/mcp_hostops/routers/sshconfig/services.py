@@ -29,7 +29,7 @@ from ...core.config.constants import (
 from ...core.config.environment import Settings, get_settings
 from ...core.errors import UserError
 from ...core.schemas import Host
-from ...core.store import write_bytes
+from ...core.store import atomic_write
 from ...core.utils.hosts import config_files, read_aliases, resolve
 from ...core.utils.ssh import run_sync
 from ...core.utils.sudo import mask, read_secret
@@ -100,7 +100,7 @@ def _read_blocks(s: Settings) -> list[Block]:
 
 def _write_blocks(blocks: list[Block], s: Settings) -> None:
     """Atomically rewrite the managed file and lock its permissions down to 0600."""
-    write_bytes(s.managed_config_file, _render_file(blocks))
+    atomic_write(s.managed_config_file, _render_file(blocks))
     s.managed_config_file.chmod(SECRET_FILE_MODE)
 
 
@@ -123,7 +123,7 @@ def _ensure_available(s: Settings) -> bool:
         existing = s.ssh_config_file.read_bytes()
     except OSError:
         existing = b""
-    write_bytes(s.ssh_config_file, include + existing)
+    atomic_write(s.ssh_config_file, include + existing)
     return True
 
 

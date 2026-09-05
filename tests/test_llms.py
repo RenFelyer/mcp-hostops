@@ -218,7 +218,7 @@ def test_index_search_fetch_end_to_end(home: Path, monkeypatch: pytest.MonkeyPat
     anyio.run(scenario)
     # The cache holds the index, full file, page and a HEAD for each variant;
     # no junk probe — text responses don't need one.
-    bodies = list((home / "cache" / "mcp-hostops" / "llms").rglob("*.body"))
+    bodies = list((home / "cache" / "mcp-hostops" / "downloads").rglob("*.body"))
     assert len(bodies) == 3 + len(constants.LLMS_VARIANTS)
 
 
@@ -247,7 +247,7 @@ def test_verify_sources_cached_until_reboot_or_ttl(monkeypatch: pytest.MonkeyPat
         ("dead.example", "unavailable", "HTTP 404"),
     ]
     assert heads == 2
-    assert s.llms_status_file.is_file()  # runtime dir: lives until reboot
+    assert (s.runtime_dir / "llms-sources-status.json").is_file()  # runtime dir: lives until reboot
 
     anyio.run(verify)
     assert heads == 2  # from saved outcomes, no network
@@ -260,7 +260,9 @@ def test_verify_sources_cached_until_reboot_or_ttl(monkeypatch: pytest.MonkeyPat
     assert heads == 6  # stale
 
     # Corrupt saved outcomes trigger a re-check, not a crash.
-    s.llms_status_file.write_text(json.dumps({"checked_at": 9e12, "sources": {"docs.astral.sh/ruff": "garbage"}}))
+    (s.runtime_dir / "llms-sources-status.json").write_text(
+        json.dumps({"checked_at": 9e12, "sources": {"docs.astral.sh/ruff": "garbage"}})
+    )
     monkeypatch.setattr(s, "llms_status_ttl", 1e6)
     anyio.run(verify)
     assert heads == 8
@@ -299,13 +301,13 @@ def test_add_and_remove_source_persist(monkeypatch: pytest.MonkeyPatch) -> None:
     assert added.default is False
     assert added.index == "https://new.example/llms.txt"
     assert added.full_size == len(FULL.encode())  # llms-full.txt size found via HEAD
-    assert s.llms_sources_file.is_file()
+    assert (s.cache_dir / "llms-sources.json").is_file()
 
     # The file is re-read on each access — that's how a source survives a
     # restart; the default flag isn't stored there, so it can't be forged by
     # editing the file.
     assert [k.domain for k in services.all_sources(s)] == ["docs.astral.sh/ruff", "new.example"]
-    assert "default" not in json.loads(s.llms_sources_file.read_text())["sources"][0]
+    assert "default" not in json.loads((s.cache_dir / "llms-sources.json").read_text())["sources"][0]
     assert services.index_url("new.example", s) == "https://new.example/llms.txt"
 
     with pytest.raises(UserError, match="already exists"):
@@ -320,14 +322,14 @@ def test_add_and_remove_source_persist(monkeypatch: pytest.MonkeyPatch) -> None:
     removed = services.remove_source("new.example", s)
     assert removed.domain == "new.example"
     assert [k.domain for k in services.all_sources(s)] == ["docs.astral.sh/ruff"]
-    assert json.loads(s.llms_sources_file.read_text()) == {"sources": []}
+    assert json.loads((s.cache_dir / "llms-sources.json").read_text()) == {"sources": []}
 
 
 @pytest.mark.usefixtures("home")
 def test_custom_cannot_shadow_default_or_claim_default_flag() -> None:
     s = get_settings()
-    s.llms_sources_file.parent.mkdir(parents=True)
-    s.llms_sources_file.write_text(
+    (s.cache_dir / "llms-sources.json").parent.mkdir(parents=True)
+    (s.cache_dir / "llms-sources.json").write_text(
         json.dumps(
             {
                 "sources": [

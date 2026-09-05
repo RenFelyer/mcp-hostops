@@ -70,13 +70,9 @@ class Settings(BaseSettings):
     llms_status_ttl: float = 86400.0  # seconds for which a source check counts as fresh
 
     # ── paths ───────────────────────────────────────────────────────────────────
-    # Cache — downloaded via llms.txt; data — user-defined llms sources.
-    # The runtime directory isn't configurable: see `state_dir`.
-    llms_cache_dir: Path = Field(default_factory=lambda: _xdg("XDG_CACHE_HOME", Path.home() / ".cache") / "llms")
-    llms_sources_file: Path = Field(
-        default_factory=lambda: _xdg("XDG_DATA_HOME", Path.home() / ".local" / "share") / "llms-sources.json"
-    )
-    # Directory with sudo passwords: `<alias>.secret`, mode 0600.
+    # State lives in the tiered store (see `core/store`); tier roots are the properties
+    # below and aren't configurable (they follow XDG). Directory with sudo passwords:
+    # `<alias>.secret`, mode 0600.
     secret_dir: Path = Field(default_factory=lambda: Path.home() / ".ssh")
 
     # ── managing ~/.ssh/config ──────────────────────────────────────────────────
@@ -96,24 +92,14 @@ class Settings(BaseSettings):
     debug_log: Path | None = None
 
     @property
-    def state_dir(self) -> Path:
-        """State directory that lasts until reboot: `XDG_RUNTIME_DIR`, or a uid-scoped temp dir."""
+    def runtime_dir(self) -> Path:
+        """Runtime tier root: `XDG_RUNTIME_DIR` (tmpfs), or a uid-scoped temp dir; until reboot."""
         return _runtime_dir()
 
     @property
-    def cache_file(self) -> Path:
-        """The availability status cache file."""
-        return self.state_dir / "hosts-status.json"
-
-    @property
-    def llms_status_file(self) -> Path:
-        """Results of the llms.txt source checks."""
-        return self.state_dir / "llms-sources-status.json"
-
-    @property
-    def control_dir(self) -> Path:
-        """The ControlMaster socket directory."""
-        return self.state_dir / "control"
+    def cache_dir(self) -> Path:
+        """Persistent tier root: `XDG_CACHE_HOME`; survives a reboot (the OS may clear a cache)."""
+        return _xdg("XDG_CACHE_HOME", Path.home() / ".cache")
 
     def secret_file(self, alias: str) -> Path:
         """The sudo password file for an alias."""

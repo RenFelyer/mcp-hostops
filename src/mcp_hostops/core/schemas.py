@@ -27,6 +27,10 @@ type SudoMode = Literal["auto", "true", "false"]
 # `timeout` there), or an `ssh -W` channel through it (no jump shell, one ssh per host).
 type JumpProbe = Literal["script", "forward"]
 
+# Storage tier by lifetime (see `core/store`): in process memory (until the server stops),
+# the runtime dir (tmpfs, until reboot), or the cache dir (survives a reboot).
+type Tier = Literal["session", "runtime", "persistent"]
+
 # Client hints shared by several tools; all four are set explicitly because the MCP
 # defaults (destructive and open_world — true) are almost always wrong. A tool with a
 # unique set describes it in its own module.

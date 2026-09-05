@@ -13,8 +13,17 @@ from mcp_hostops.core.config.environment import Settings, get_settings
 from mcp_hostops.core.errors import UserError
 from mcp_hostops.core.schemas import KnownSource
 from mcp_hostops.routers.llms import services
-from mcp_hostops.routers.llms.schemas import IndexEntry, LlmsIndex, SearchResult, SearchScope, SourceStatus, Variant
-from mcp_hostops.routers.llms.services import Session, render_index
+from mcp_hostops.routers.llms.schemas import (
+    IndexEntry,
+    LlmsIndex,
+    Page,
+    SearchHit,
+    SearchResult,
+    SearchScope,
+    SourceStatus,
+    Variant,
+)
+from mcp_hostops.routers.llms.services import Session, render_index, render_page, render_search
 
 INDEX = """# Ruff
 
@@ -509,3 +518,70 @@ def test_render_index_without_extras() -> None:
         variants=[Variant(name="llms.txt", size=None)],
     )
     assert render_index(index) == "# Demo\n- [a](https://x/a)\n"
+
+
+def test_render_search_groups_hits_and_lists_skipped() -> None:
+    result = SearchResult(
+        query="line length",
+        scope="index",
+        searched=["docs.astral.sh/ruff"],
+        skipped=["docs.example: HTTP 500"],
+        total=1,
+        hits=[
+            SearchHit(
+                domain="docs.astral.sh/ruff",
+                title="E501",
+                url="https://x/e501.md",
+                text="line too long",
+                truncated=False,
+            )
+        ],
+    )
+    md = render_search(result)
+    assert md.startswith("# Search: line length\n")
+    assert "1 match(es), index scope; searched: docs.astral.sh/ruff" in md
+    assert "## docs.astral.sh/ruff\n- [E501](https://x/e501.md): line too long\n" in md
+    assert "## Skipped\n- docs.example: HTTP 500\n" in md
+
+
+def test_render_search_collapses_excerpt_and_notes_cap() -> None:
+    result = SearchResult(
+        query="q",
+        scope="full",
+        searched=["d"],
+        skipped=[],
+        total=5,
+        hits=[SearchHit(domain="d", title="S", url="https://x/f", text="a\n\n  b   c", truncated=True)],
+    )
+    md = render_search(result)
+    assert "- [S](https://x/f): a b c …" in md  # newlines/runs collapsed, truncation marked
+    assert "(showing first 1)" in md  # total 5 > 1 shown
+
+
+def test_render_page_whole_verbatim() -> None:
+    page = Page(url="https://x/p.md", content_type="text/markdown", length=5, offset=0, text="hello", next_offset=None)
+    assert render_page(page) == "hello\n"
+
+
+def test_render_page_chunk_framed() -> None:
+    page = Page(url="https://x/p.md", content_type="text/markdown", length=100, offset=0, text="abc", next_offset=20)
+    md = render_page(page)
+    assert md.startswith("_https://x/p.md — chars 0–3 of 100_\n\n")
+    assert "abc" in md
+    assert "_next: llms_fetch with offset=20_" in md
+
+
+def test_render_page_last_chunk_has_no_next() -> None:
+    page = Page(url="https://x/p.md", content_type="text/markdown", length=23, offset=20, text="end", next_offset=None)
+    md = render_page(page)
+    assert md.startswith("_https://x/p.md — chars 20–23 of 23_\n\n")
+    assert "_next:" not in md
+
+
+def test_fetch_page_rejects_full_file() -> None:
+    async def scenario() -> None:
+        async with Session() as session:
+            await session.fetch_page("https://docs.example/llms-full.txt", 0)
+
+    with pytest.raises(UserError, match="scope=full"):
+        anyio.run(scenario)

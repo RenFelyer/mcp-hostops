@@ -323,6 +323,45 @@ def render_index(index: LlmsIndex) -> str:
     )
 
 
+def render_search(result: SearchResult) -> str:
+    """Render search matches as markdown: hits grouped by domain, skipped sources listed.
+
+    Uses the shared index template — a match is a link (title, url) whose
+    description is the excerpt collapsed to one line, so long full-file excerpts
+    stay valid list items; the real page is read via llms_fetch.
+    """
+    links = [
+        Link(
+            title=hit.title,
+            url=hit.url,
+            description=" ".join(hit.text.split()) + (" …" if hit.truncated else ""),
+            section=hit.domain,
+        )
+        for hit in result.hits
+    ]
+    searched = ", ".join(result.searched) or "none"
+    summary = f"{result.total} match(es), {result.scope} scope; searched: {searched}"
+    if result.total > len(result.hits):
+        summary += f" (showing first {len(result.hits)})"
+    return markdown_index(
+        f"Search: {result.query}", summary, links, trailing_heading="Skipped", trailing=result.skipped
+    )
+
+
+def render_page(page: Page) -> str:
+    """Render a fetched page as markdown: the text as-is, framed only when chunked.
+
+    A whole page is returned untouched (it is already a document). A chunk gets
+    a one-line header with its character range and, unless it's the last, a note
+    with the offset to read from next.
+    """
+    if page.offset == 0 and page.next_offset is None:
+        return page.text if page.text.endswith("\n") else page.text + "\n"
+    header = f"_{page.url} — chars {page.offset}–{page.offset + len(page.text)} of {page.length}_\n\n"
+    footer = "" if page.next_offset is None else f"\n\n_next: llms_fetch with offset={page.next_offset}_"
+    return f"{header}{page.text}{footer}\n"
+
+
 def sections(text: str) -> list[tuple[str, str]]:
     """Split markdown by headings up to level three.
 
